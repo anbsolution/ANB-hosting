@@ -1,0 +1,134 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?Set POSTGRES_DB in .env}
+      POSTGRES_USER: ${POSTGRES_USER:?Set POSTGRES_USER in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - control_plane
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/api.Dockerfile
+    restart: unless-stopped
+    command: ["sh", "-c", "npm run db:push && npm run start:prod -w @anb/api"]
+    environment:
+      NODE_ENV: development
+      PORT: 3001
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?schema=public
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
+      ENGINE_URL: http://hosting-engine:3010
+      ENGINE_TOKEN: ${ENGINE_TOKEN:?Set ENGINE_TOKEN in .env}
+      WEBSITE_DOMAIN_SUFFIX: ${WEBSITE_DOMAIN_SUFFIX:?Set WEBSITE_DOMAIN_SUFFIX in .env}
+      COOKIE_SECURE: ${COOKIE_SECURE:-true}
+      WEB_ORIGINS: ${WEB_ORIGINS:-http://localhost:3000,http://localhost:8080}
+    networks:
+      - control_plane
+    depends_on:
+      postgres:
+        condition: service_healthy
+      hosting-engine:
+        condition: service_healthy
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/dashboard.Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-/api/v1}
+        API_INTERNAL_URL: http://api:3001
+    restart: unless-stopped
+    networks:
+      - control_plane
+    depends_on:
+      - api
+
+  hosting-site-image:
+    build:
+      context: ./services/hosting-engine/site-image
+    image: anb-hosting-site:0.1.0
+    entrypoint: ["/bin/true"]
+    restart: "no"
+    networks:
+      - control_plane
+
+  hosting-config-init:
+    image: alpine:3.20
+    command:
+      - sh
+      - -c
+      - mkdir -p /var/lib/hosting-engine && touch /var/lib/hosting-engine/upstreams.map /var/lib/hosting-engine/previews.map /var/lib/hosting-engine/site_clients.map
+    restart: "no"
+    volumes:
+      - hosting_configs:/var/lib/hosting-engine
+    networks:
+      - control_plane
+
+  hosting-engine:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/hosting-engine.Dockerfile
+    restart: unless-stopped
+    environment:
+      PORT: 3010
+      ENGINE_TOKEN: ${ENGINE_TOKEN:?Set ENGINE_TOKEN in .env}
+      WEBSITE_DOMAIN_SUFFIX: ${WEBSITE_DOMAIN_SUFFIX:?Set WEBSITE_DOMAIN_SUFFIX in .env}
+      DOCKER_SOCKET_PATH: /var/run/docker.sock
+      SITE_IMAGE: anb-hosting-site:0.1.0
+      NGINX_CONTAINER_NAME: anb-hosting-nginx
+      HOSTING_CONFIG_DIR: /var/lib/hosting-engine
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - hosting_configs:/var/lib/hosting-engine
+    networks:
+      - control_plane
+    depends_on:
+      hosting-site-image:
+        condition: service_completed_successfully
+      nginx:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3010/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: anb-hosting-nginx
+    restart: unless-stopped
+    environment:
+      WEBSITE_DOMAIN_SUFFIX: ${WEBSITE_DOMAIN_SUFFIX:?Set WEBSITE_DOMAIN_SUFFIX in .env}
+      LAN_ALLOWED_CIDR: ${LAN_ALLOWED_CIDR:?Set LAN_ALLOWED_CIDR in .env}
+      NGINX_ENVSUBST_FILTER: '^(WEBSITE_DOMAIN_SUFFIX|LAN_ALLOWED_CIDR)$'
+    networks:
+      - control_plane
+    depends_on:
+      hosting-config-init:
+        condition: service_completed_successfully
+    volumes:
+      - ./infrastructure/nginx/default.conf.template:/etc/nginx/templates/default.conf.template:ro
+      - ./infrastructure/local-certs:/etc/nginx/certs:ro
+      - hosting_configs:/etc/nginx/sites-enabled:ro
+    ports:
+      - "${LAN_SERVER_IP:?Set LAN_SERVER_IP in .env}:8080:80"
+      - "${LAN_SERVER_IP:?Set LAN_SERVER_IP in .env}:8443:443"
+
+volumes:
+  postgres_data:
+  hosting_configs:
+
+networks:
+  control_plane:
+    driver: bridge
+    internal: true

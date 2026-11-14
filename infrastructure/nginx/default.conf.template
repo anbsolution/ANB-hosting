@@ -1,0 +1,127 @@
+map $host $site_upstream {
+    default "";
+    include /etc/nginx/sites-enabled/upstreams.map;
+}
+
+map $remote_addr $site_container_client {
+    default 0;
+    include /etc/nginx/sites-enabled/site_clients.map;
+}
+
+map $uri $preview_upstream {
+    default "";
+    include /etc/nginx/sites-enabled/previews.map;
+}
+
+geo $remote_addr $lan_access_allowed {
+    default 0;
+    127.0.0.1 1;
+    ::1 1;
+    ${LAN_ALLOWED_CIDR} 1;
+}
+
+server {
+    listen 80 default_server;
+    server_name _;
+
+    if ($lan_access_allowed = 0) {
+        return 403;
+    }
+
+    return 308 https://$host:8443$request_uri;
+}
+
+server {
+    listen 80;
+    server_name *.${WEBSITE_DOMAIN_SUFFIX};
+
+    if ($lan_access_allowed = 0) {
+        return 403;
+    }
+
+    return 308 https://$host:8443$request_uri;
+}
+
+server {
+    listen 443 ssl default_server;
+    server_name _;
+    resolver 127.0.0.11 valid=10s ipv6=off;
+
+    ssl_certificate /etc/nginx/certs/server.crt;
+    ssl_certificate_key /etc/nginx/certs/server.key;
+    ssl_protocols TLSv1.2 TLSv1.3;
+
+    if ($site_container_client) {
+        return 403;
+    }
+    if ($lan_access_allowed = 0) {
+        return 403;
+    }
+
+    location ~ ^/preview/([a-z0-9-]+)$ {
+        return 308 /preview/$1/;
+    }
+
+    location ~ ^/preview/[a-z0-9-]+(/.*)$ {
+        set $preview_target $preview_upstream;
+        if ($preview_target = "") {
+            return 404;
+        }
+        rewrite ^/preview/[a-z0-9-]+(/.*)$ $1 break;
+        proxy_pass http://$preview_target$uri$is_args$args;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location /api/ {
+        set $api_upstream api:3001;
+        proxy_pass http://$api_upstream$request_uri;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location / {
+        set $dashboard_upstream dashboard:3000;
+        proxy_pass http://$dashboard_upstream$request_uri;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+
+server {
+    listen 443 ssl;
+    server_name *.${WEBSITE_DOMAIN_SUFFIX};
+    resolver 127.0.0.11 valid=10s ipv6=off;
+
+    ssl_certificate /etc/nginx/certs/server.crt;
+    ssl_certificate_key /etc/nginx/certs/server.key;
+    ssl_protocols TLSv1.2 TLSv1.3;
+
+    if ($site_container_client) {
+        return 403;
+    }
+    if ($lan_access_allowed = 0) {
+        return 403;
+    }
+
+    location / {
+        if ($site_upstream = "") {
+            return 404;
+        }
+        proxy_pass http://$site_upstream$request_uri;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}

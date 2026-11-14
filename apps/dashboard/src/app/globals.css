@@ -1,0 +1,67 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+  --page: #f5f6fa;
+  --surface: #ffffff;
+  --surface-subtle: #f8f9fc;
+  --ink: #101828;
+  --muted: #667085;
+  --line: #eaecf0;
+  --brand: #635bff;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--page);
+  color: var(--ink);
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+.dark {
+  color-scheme: dark;
+  --page: #10131d;
+  --surface: #181d2b;
+  --surface-subtle: #202638;
+  --ink: #f5f7ff;
+  --muted: #a4aec2;
+  --line: #2a3244;
+  --brand: #928bff;
+}
+
+.dark .dashboard-card,
+.dark .sidebar,
+.dark .topbar,
+.dark .auth-card {
+  background: var(--surface);
+}
+
+.dark .nav-link:hover,
+.dark .nav-link.active,
+.dark .site-row:hover {
+  background: var(--surface-subtle);
+}
+
+.dark .muted-panel {
+  background: var(--surface-subtle);
+}
+
+.focus-ring:focus-visible {
+  outline: 3px solid rgba(99, 91, 255, 0.38);
+  outline-offset: 2px;
+}
