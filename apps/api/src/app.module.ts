@@ -26,10 +26,14 @@ import { WebsitesModule } from './websites/websites.module';
           otherwise: Joi.boolean().default(false),
         }),
         WEB_ORIGINS: Joi.string().required(),
-        ENGINE_URL: Joi.string().uri({ scheme: ['http', 'https'] }).required(),
+        ENGINE_URL: Joi.string()
+          .uri({ scheme: ['http', 'https'] })
+          .required(),
         ENGINE_TOKEN: Joi.string().min(32).required(),
         WEBSITE_DOMAIN_SUFFIX: Joi.string()
-          .pattern(/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/)
+          .pattern(
+            /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/,
+          )
           .required(),
       }),
     }),

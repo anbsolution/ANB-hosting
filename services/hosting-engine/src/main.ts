@@ -4,12 +4,10 @@ import { SiteManager, isValidHostname } from './site-manager';
 
 const token = process.env.ENGINE_TOKEN;
 const port = Number(process.env.PORT ?? 3010);
-const domainSuffix = process.env.WEBSITE_DOMAIN_SUFFIX?.toLowerCase();
+const domainSuffix = validateDomainSuffix(process.env.WEBSITE_DOMAIN_SUFFIX);
 
-if (!token || token.length < 32) throw new Error('ENGINE_TOKEN must contain at least 32 characters');
-if (!domainSuffix || !/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(domainSuffix)) {
-  throw new Error('WEBSITE_DOMAIN_SUFFIX is invalid');
-}
+if (!token || token.length < 32)
+  throw new Error('ENGINE_TOKEN must contain at least 32 characters');
 if (!Number.isInteger(port) || port < 1 || port > 65_535) throw new Error('PORT is invalid');
 
 const manager = new SiteManager({
@@ -28,15 +26,15 @@ const server = createServer(async (request, response) => {
       sendJson(response, error.status, { message: error.message });
       return;
     }
-    console.error('Hosting engine operation failed', error instanceof Error ? error.message : 'Unknown error');
+    console.error(
+      'Hosting engine operation failed',
+      error instanceof Error ? error.message : 'Unknown error',
+    );
     sendJson(response, 500, { message: 'Hosting engine operation failed' });
   }
 });
 
-async function handleRequest(
-  request: IncomingMessage,
-  response: ServerResponse,
-): Promise<void> {
+async function handleRequest(request: IncomingMessage, response: ServerResponse): Promise<void> {
   const url = new URL(request.url ?? '/', 'http://hosting-engine');
   if (request.method === 'GET' && url.pathname === '/health') {
     sendJson(response, 200, { status: 'ok' });
@@ -72,15 +70,18 @@ async function handleRequest(
     return;
   }
 
-  const siteRoute = /^\/v1\/sites\/([0-9a-f-]{36})(?:\/(start|stop|restart))?$/.exec(
-    url.pathname,
-  );
+  const siteRoute = /^\/v1\/sites\/([0-9a-f-]{36})(?:\/(start|stop|restart))?$/.exec(url.pathname);
   if (!siteRoute) {
     sendJson(response, 404, { message: 'Not found' });
     return;
   }
 
-  const [, id, action] = siteRoute;
+  const id = siteRoute[1];
+  const action = siteRoute[2];
+  if (!id) {
+    sendJson(response, 404, { message: 'Not found' });
+    return;
+  }
   if (request.method === 'GET' && !action) {
     sendJson(response, 200, await manager.status(id));
     return;
@@ -118,9 +119,20 @@ async function handleRequest(
 }
 
 function isSiteId(value: string): boolean {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-    value,
-  );
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+
+function validateDomainSuffix(value: string | undefined): string {
+  const suffix = value?.toLowerCase();
+  if (
+    !suffix ||
+    !/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(
+      suffix,
+    )
+  ) {
+    throw new Error('WEBSITE_DOMAIN_SUFFIX is invalid');
+  }
+  return suffix;
 }
 
 function authorized(header: string | undefined): boolean {

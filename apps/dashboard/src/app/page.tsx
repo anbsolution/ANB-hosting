@@ -28,7 +28,16 @@ type Website = {
   name: string;
   slug: string;
   hostname: string;
-  status: 'PENDING' | 'PROVISIONING' | 'STARTING' | 'STOPPING' | 'RESTARTING' | 'DELETING' | 'ACTIVE' | 'STOPPED' | 'FAILED';
+  status:
+    | 'PENDING'
+    | 'PROVISIONING'
+    | 'STARTING'
+    | 'STOPPING'
+    | 'RESTARTING'
+    | 'DELETING'
+    | 'ACTIVE'
+    | 'STOPPED'
+    | 'FAILED';
   errorCode: string | null;
   createdAt: string;
   updatedAt: string;
@@ -62,7 +71,8 @@ async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
     let csrfToken = readCsrfCookie();
     if (!csrfToken) {
       const csrfResponse = await fetch(`${API_URL}/auth/csrf`, { credentials: 'include' });
-      if (!csrfResponse.ok) throw new ApiError('Unable to initialize request security', csrfResponse.status);
+      if (!csrfResponse.ok)
+        throw new ApiError('Unable to initialize request security', csrfResponse.status);
       const csrfResult = (await csrfResponse.json()) as { csrfToken: string };
       csrfToken = csrfResult.csrfToken;
     }
@@ -84,9 +94,7 @@ async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 function readCsrfCookie(): string | null {
-  const cookie = document.cookie
-    .split('; ')
-    .find((entry) => entry.startsWith('anb_csrf='));
+  const cookie = document.cookie.split('; ').find((entry) => entry.startsWith('anb_csrf='));
   return cookie?.slice('anb_csrf='.length) ?? null;
 }
 
@@ -188,7 +196,9 @@ export default function HomePage() {
       setWebsiteName('');
       await Promise.all([loadSummary(), loadWebsites()]);
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : 'Website provisioning failed');
+      setError(
+        requestError instanceof Error ? requestError.message : 'Website provisioning failed',
+      );
     } finally {
       setWebsiteBusy('');
     }
@@ -238,7 +248,9 @@ export default function HomePage() {
             {registering ? 'Create your workspace' : 'Welcome back'}
           </h1>
           <p className="mt-2 text-sm text-muted">
-            {registering ? 'Start with a secure hosting workspace.' : 'Sign in to manage your hosting.'}
+            {registering
+              ? 'Start with a secure hosting workspace.'
+              : 'Sign in to manage your hosting.'}
           </p>
           <form onSubmit={submitAuth} className="mt-7 space-y-4">
             {registering && (
@@ -279,7 +291,11 @@ export default function HomePage() {
                 placeholder="At least 12 characters"
               />
             </label>
-            {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
+            {error && (
+              <p role="alert" className="text-sm text-red-600">
+                {error}
+              </p>
+            )}
             <button
               disabled={busy}
               className="focus-ring w-full rounded-xl bg-brand px-4 py-3 font-semibold text-white transition hover:opacity-90 disabled:opacity-60"
@@ -342,7 +358,9 @@ export default function HomePage() {
         <section className="min-w-0 flex-1">
           <header className="topbar sticky top-0 z-10 flex h-[72px] items-center justify-between border-b border-[var(--line)] bg-white/90 px-4 backdrop-blur md:px-8">
             <div className="flex items-center gap-3">
-              <div className="lg:hidden"><BrandMark /></div>
+              <div className="lg:hidden">
+                <BrandMark />
+              </div>
               <div>
                 <p className="text-sm font-semibold">{profile.tenant.name}</p>
                 <p className="hidden text-xs text-muted sm:block">Hosting workspace</p>
@@ -356,7 +374,10 @@ export default function HomePage() {
               >
                 {darkMode ? '☼' : '◐'}
               </button>
-              <button onClick={signOut} className="focus-ring rounded-lg px-2 py-2 text-xs font-medium text-muted hover:text-ink">
+              <button
+                onClick={signOut}
+                className="focus-ring rounded-lg px-2 py-2 text-xs font-medium text-muted hover:text-ink"
+              >
                 Sign out
               </button>
               <div className="grid h-9 w-9 place-items-center rounded-full bg-[#ebe9ff] text-xs font-bold text-brand">
@@ -379,7 +400,10 @@ export default function HomePage() {
             </div>
 
             {error && (
-              <p role="alert" className="mb-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+              <p
+                role="alert"
+                className="mb-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"
+              >
                 {error}
               </p>
             )}
@@ -387,10 +411,33 @@ export default function HomePage() {
             {activeNav === 'Overview' && (
               <>
                 <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-                  <MetricCard title="Websites" value={summary?.websites ?? 0} note="In this workspace" icon="▣" />
-                  <MetricCard title="Active websites" value={summary?.activeWebsites ?? 0} note="Running sites" icon="↗" tone="green" />
-                  <MetricCard title="Domains" value={summary?.domains ?? 0} note="Connected to workspace" icon="◎" tone="blue" />
-                  <MetricCard title="Storage" value="—" note="Measured when file management is enabled" icon="▱" tone="amber" />
+                  <MetricCard
+                    title="Websites"
+                    value={summary?.websites ?? 0}
+                    note="In this workspace"
+                    icon="▣"
+                  />
+                  <MetricCard
+                    title="Active websites"
+                    value={summary?.activeWebsites ?? 0}
+                    note="Running sites"
+                    icon="↗"
+                    tone="green"
+                  />
+                  <MetricCard
+                    title="Domains"
+                    value={summary?.domains ?? 0}
+                    note="Connected to workspace"
+                    icon="◎"
+                    tone="blue"
+                  />
+                  <MetricCard
+                    title="Storage"
+                    value="—"
+                    note="Measured when file management is enabled"
+                    icon="▱"
+                    tone="amber"
+                  />
                 </div>
 
                 <div className="mt-6 grid gap-5 xl:grid-cols-[1.55fr_1fr]">
@@ -400,7 +447,10 @@ export default function HomePage() {
                         <h2 className="font-bold">Websites</h2>
                         <p className="mt-1 text-xs text-muted">Your provisioned static sites</p>
                       </div>
-                      <button onClick={() => setActiveNav('Websites')} className="text-xs font-semibold text-brand">
+                      <button
+                        onClick={() => setActiveNav('Websites')}
+                        className="text-xs font-semibold text-brand"
+                      >
                         Manage sites →
                       </button>
                     </div>
@@ -418,7 +468,9 @@ export default function HomePage() {
                       </div>
                     ) : (
                       <div className="muted-panel mt-5 rounded-xl bg-[#f8f9fc] px-4 py-8 text-center">
-                        <div className="mx-auto grid h-11 w-11 place-items-center rounded-xl bg-white text-xl text-brand shadow-sm">▣</div>
+                        <div className="mx-auto grid h-11 w-11 place-items-center rounded-xl bg-white text-xl text-brand shadow-sm">
+                          ▣
+                        </div>
                         <h3 className="mt-3 text-sm font-semibold">No websites yet</h3>
                         <p className="mx-auto mt-1 max-w-sm text-xs leading-5 text-muted">
                           Create a site to provision an isolated static website container.
@@ -431,9 +483,21 @@ export default function HomePage() {
                     <h2 className="font-bold">Workspace health</h2>
                     <p className="mt-1 text-xs text-muted">Platform service status</p>
                     <div className="mt-5 space-y-4">
-                      <HealthRow label="Account security" status="Protected" detail="Secure session enabled" />
-                      <HealthRow label="Database" status="Connected" detail="PostgreSQL workspace ready" />
-                      <HealthRow label="Website engine" status="Ready" detail="Isolated static containers" />
+                      <HealthRow
+                        label="Account security"
+                        status="Protected"
+                        detail="Secure session enabled"
+                      />
+                      <HealthRow
+                        label="Database"
+                        status="Connected"
+                        detail="PostgreSQL workspace ready"
+                      />
+                      <HealthRow
+                        label="Website engine"
+                        status="Ready"
+                        detail="Isolated static containers"
+                      />
                     </div>
                   </section>
                 </div>
@@ -444,7 +508,9 @@ export default function HomePage() {
                       <h2 className="font-bold">Recent activity</h2>
                       <p className="mt-1 text-xs text-muted">Changes in your workspace</p>
                     </div>
-                    <span className="rounded-full bg-[#f0efff] px-2.5 py-1 text-[10px] font-bold text-brand">AUDIT LOG</span>
+                    <span className="rounded-full bg-[#f0efff] px-2.5 py-1 text-[10px] font-bold text-brand">
+                      AUDIT LOG
+                    </span>
                   </div>
                   {summary?.recentActivity.length ? (
                     <div className="mt-5 divide-y divide-[var(--line)]">
@@ -454,14 +520,17 @@ export default function HomePage() {
                           <div className="min-w-0">
                             <p className="text-sm font-medium">{formatActivity(activity.action)}</p>
                             <p className="mt-1 truncate text-xs text-muted">
-                              {activity.actor?.email ?? 'System'} · {new Date(activity.createdAt).toLocaleString()}
+                              {activity.actor?.email ?? 'System'} ·{' '}
+                              {new Date(activity.createdAt).toLocaleString()}
                             </p>
                           </div>
                         </div>
                       ))}
                     </div>
                   ) : (
-                    <p className="mt-5 text-sm text-muted">No workspace activity has been recorded yet.</p>
+                    <p className="mt-5 text-sm text-muted">
+                      No workspace activity has been recorded yet.
+                    </p>
                   )}
                   <div className="mt-5 border-t border-[var(--line)] pt-4 text-xs text-muted">
                     Resource usage will appear when file and monitoring services are enabled.
@@ -501,7 +570,9 @@ export default function HomePage() {
                 <section className="dashboard-card rounded-2xl border border-[var(--line)] bg-white p-5 shadow-soft md:p-6">
                   <div className="mb-5">
                     <h2 className="font-bold">Your websites</h2>
-                    <p className="mt-1 text-xs text-muted">Static sites run in isolated, resource-limited containers.</p>
+                    <p className="mt-1 text-xs text-muted">
+                      Static sites run in isolated, resource-limited containers.
+                    </p>
                   </div>
                   {websites.length ? (
                     <div className="divide-y divide-[var(--line)]">
@@ -513,7 +584,9 @@ export default function HomePage() {
                                 <h3 className="font-semibold">{website.name}</h3>
                                 <WebsiteStatusBadge status={website.status} />
                               </div>
-                              <p className="mt-1 break-all text-xs text-muted">{website.hostname}</p>
+                              <p className="mt-1 break-all text-xs text-muted">
+                                {website.hostname}
+                              </p>
                               {website.status === 'ACTIVE' && (
                                 <a
                                   href={`/preview/${website.slug}/`}
@@ -525,23 +598,42 @@ export default function HomePage() {
                                 </a>
                               )}
                               {website.errorCode && (
-                                <p className="mt-1 text-xs text-red-600">Issue: {website.errorCode}</p>
+                                <p className="mt-1 text-xs text-red-600">
+                                  Issue: {website.errorCode}
+                                </p>
                               )}
                             </div>
                             {profile.role === 'ADMIN' && (
                               <div className="flex flex-wrap gap-2">
                                 {website.status === 'ACTIVE' && (
                                   <>
-                                    <SmallAction disabled={websiteBusy === website.id} onClick={() => operateWebsite(website, 'stop')}>Stop</SmallAction>
-                                    <SmallAction disabled={websiteBusy === website.id} onClick={() => operateWebsite(website, 'restart')}>Restart</SmallAction>
+                                    <SmallAction
+                                      disabled={websiteBusy === website.id}
+                                      onClick={() => operateWebsite(website, 'stop')}
+                                    >
+                                      Stop
+                                    </SmallAction>
+                                    <SmallAction
+                                      disabled={websiteBusy === website.id}
+                                      onClick={() => operateWebsite(website, 'restart')}
+                                    >
+                                      Restart
+                                    </SmallAction>
                                   </>
                                 )}
                                 {(website.status === 'STOPPED' || website.status === 'FAILED') && (
-                                  <SmallAction disabled={websiteBusy === website.id} onClick={() => operateWebsite(website, 'start')}>Start</SmallAction>
+                                  <SmallAction
+                                    disabled={websiteBusy === website.id}
+                                    onClick={() => operateWebsite(website, 'start')}
+                                  >
+                                    Start
+                                  </SmallAction>
                                 )}
                                 <SmallAction
                                   danger
-                                  disabled={websiteBusy === website.id || isWebsiteChanging(website.status)}
+                                  disabled={
+                                    websiteBusy === website.id || isWebsiteChanging(website.status)
+                                  }
                                   onClick={() => operateWebsite(website, 'delete')}
                                 >
                                   Delete
@@ -568,8 +660,8 @@ export default function HomePage() {
                 </span>
                 <h2 className="mt-4 text-lg font-bold">{activeNav} management</h2>
                 <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-muted">
-                  This section is not enabled yet. It will be connected to verified hosting services before
-                  it can make changes to your account.
+                  This section is not enabled yet. It will be connected to verified hosting services
+                  before it can make changes to your account.
                 </p>
               </section>
             )}
@@ -709,7 +801,9 @@ function MetricCard({
           <p className="text-xs font-medium text-muted">{title}</p>
           <p className="mt-3 text-3xl font-bold tracking-tight">{value}</p>
         </div>
-        <span className={`grid h-10 w-10 place-items-center rounded-xl text-lg ${iconTones[tone]}`}>{icon}</span>
+        <span className={`grid h-10 w-10 place-items-center rounded-xl text-lg ${iconTones[tone]}`}>
+          {icon}
+        </span>
       </div>
       <p className="mt-3 text-[11px] text-muted">{note}</p>
     </article>
@@ -729,12 +823,18 @@ function HealthRow({
 }) {
   return (
     <div className="flex items-center gap-3">
-      <span className={`h-2 w-2 shrink-0 rounded-full ${pending ? 'bg-amber-400' : 'bg-emerald-500'}`} />
+      <span
+        className={`h-2 w-2 shrink-0 rounded-full ${pending ? 'bg-amber-400' : 'bg-emerald-500'}`}
+      />
       <div className="min-w-0 flex-1">
         <p className="text-sm font-medium">{label}</p>
         <p className="mt-0.5 truncate text-[11px] text-muted">{detail}</p>
       </div>
-      <span className={`text-[10px] font-semibold ${pending ? 'text-amber-600' : 'text-emerald-600'}`}>{status}</span>
+      <span
+        className={`text-[10px] font-semibold ${pending ? 'text-amber-600' : 'text-emerald-600'}`}
+      >
+        {status}
+      </span>
     </div>
   );
 }

@@ -11,7 +11,7 @@ services:
     networks:
       - control_plane
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      test: ['CMD-SHELL', 'pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"']
       interval: 5s
       timeout: 5s
       retries: 10
@@ -21,7 +21,7 @@ services:
       context: .
       dockerfile: infrastructure/docker/api.Dockerfile
     restart: unless-stopped
-    command: ["sh", "-c", "npm run db:push && npm run start:prod -w @anb/api"]
+    command: ['sh', '-c', 'npm run db:push && npm run start:prod -w @anb/api']
     environment:
       NODE_ENV: development
       PORT: 3001
@@ -57,8 +57,8 @@ services:
     build:
       context: ./services/hosting-engine/site-image
     image: anb-hosting-site:0.1.0
-    entrypoint: ["/bin/true"]
-    restart: "no"
+    entrypoint: ['/bin/true']
+    restart: 'no'
     networks:
       - control_plane
 
@@ -68,7 +68,7 @@ services:
       - sh
       - -c
       - mkdir -p /var/lib/hosting-engine && touch /var/lib/hosting-engine/upstreams.map /var/lib/hosting-engine/previews.map /var/lib/hosting-engine/site_clients.map
-    restart: "no"
+    restart: 'no'
     volumes:
       - hosting_configs:/var/lib/hosting-engine
     networks:
@@ -98,7 +98,13 @@ services:
       nginx:
         condition: service_started
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3010/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3010/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -113,6 +119,7 @@ services:
       NGINX_ENVSUBST_FILTER: '^(WEBSITE_DOMAIN_SUFFIX|LAN_ALLOWED_CIDR)$'
     networks:
       - control_plane
+      - lan_ingress
     depends_on:
       hosting-config-init:
         condition: service_completed_successfully
@@ -121,8 +128,8 @@ services:
       - ./infrastructure/local-certs:/etc/nginx/certs:ro
       - hosting_configs:/etc/nginx/sites-enabled:ro
     ports:
-      - "${LAN_SERVER_IP:?Set LAN_SERVER_IP in .env}:8080:80"
-      - "${LAN_SERVER_IP:?Set LAN_SERVER_IP in .env}:8443:443"
+      - '${LAN_SERVER_IP:?Set LAN_SERVER_IP in .env}:8080:80'
+      - '${LAN_SERVER_IP:?Set LAN_SERVER_IP in .env}:8443:443'
 
 volumes:
   postgres_data:
@@ -132,3 +139,5 @@ networks:
   control_plane:
     driver: bridge
     internal: true
+  lan_ingress:
+    driver: bridge

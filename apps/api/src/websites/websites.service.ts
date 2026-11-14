@@ -50,11 +50,7 @@ export class WebsitesService {
     });
   }
 
-  async create(
-    tenantId: string,
-    actorId: string,
-    input: CreateWebsiteDto,
-  ): Promise<WebsiteView> {
+  async create(tenantId: string, actorId: string, input: CreateWebsiteDto): Promise<WebsiteView> {
     const name = input.name.trim();
     const baseSlug = name
       .normalize('NFKD')
@@ -142,11 +138,7 @@ export class WebsitesService {
     );
   }
 
-  async remove(
-    tenantId: string,
-    actorId: string,
-    id: string,
-  ): Promise<{ deleted: true }> {
+  async remove(tenantId: string, actorId: string, id: string): Promise<{ deleted: true }> {
     const website = await this.findForTenant(tenantId, id);
     if (
       [
@@ -214,7 +206,9 @@ export class WebsitesService {
     const website = await this.findForTenant(tenantId, id);
     if (website.status === target) return website;
     if (!allowed.includes(website.status)) {
-      throw new ConflictException(`Cannot perform this operation while website is ${website.status}`);
+      throw new ConflictException(
+        `Cannot perform this operation while website is ${website.status}`,
+      );
     }
 
     const claimed = await this.prisma.website.updateMany({
@@ -292,10 +286,5 @@ export class WebsitesService {
 }
 
 function isUniqueConstraintError(error: unknown): boolean {
-  return (
-    typeof error === 'object' &&
-    error !== null &&
-    'code' in error &&
-    error.code === 'P2002'
-  );
+  return typeof error === 'object' && error !== null && 'code' in error && error.code === 'P2002';
 }

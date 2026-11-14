@@ -1,13 +1,4 @@
-import {
-  Body,
-  Controller,
-  Get,
-  HttpCode,
-  HttpStatus,
-  Post,
-  Res,
-  UseGuards,
-} from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, HttpStatus, Post, Res, UseGuards } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Throttle } from '@nestjs/throttler';
 import { Response } from 'express';
@@ -28,9 +19,7 @@ export class AuthController {
   ) {}
 
   @Get('csrf')
-  getCsrfToken(
-    @Res({ passthrough: true }) response: Response,
-  ): { csrfToken: string } {
+  getCsrfToken(@Res({ passthrough: true }) response: Response): { csrfToken: string } {
     return { csrfToken: this.setCsrfCookie(response) };
   }
 

@@ -31,20 +31,14 @@ export class WebsitesController {
   }
 
   @Get(':id/status')
-  status(
-    @CurrentUser() user: AuthenticatedUser,
-    @Param('id', ParseUUIDPipe) id: string,
-  ) {
+  status(@CurrentUser() user: AuthenticatedUser, @Param('id', ParseUUIDPipe) id: string) {
     return this.websites.status(user.tenantId, id);
   }
 
   @Post()
   @UseGuards(CsrfGuard)
   @Roles(MembershipRole.ADMIN)
-  create(
-    @CurrentUser() user: AuthenticatedUser,
-    @Body() input: CreateWebsiteDto,
-  ) {
+  create(@CurrentUser() user: AuthenticatedUser, @Body() input: CreateWebsiteDto) {
     return this.websites.create(user.tenantId, user.userId, input);
   }
 
@@ -52,10 +46,7 @@ export class WebsitesController {
   @HttpCode(HttpStatus.OK)
   @UseGuards(CsrfGuard)
   @Roles(MembershipRole.ADMIN)
-  start(
-    @CurrentUser() user: AuthenticatedUser,
-    @Param('id', ParseUUIDPipe) id: string,
-  ) {
+  start(@CurrentUser() user: AuthenticatedUser, @Param('id', ParseUUIDPipe) id: string) {
     return this.websites.start(user.tenantId, user.userId, id);
   }
 
@@ -63,10 +54,7 @@ export class WebsitesController {
   @HttpCode(HttpStatus.OK)
   @UseGuards(CsrfGuard)
   @Roles(MembershipRole.ADMIN)
-  stop(
-    @CurrentUser() user: AuthenticatedUser,
-    @Param('id', ParseUUIDPipe) id: string,
-  ) {
+  stop(@CurrentUser() user: AuthenticatedUser, @Param('id', ParseUUIDPipe) id: string) {
     return this.websites.stop(user.tenantId, user.userId, id);
   }
 
@@ -74,10 +62,7 @@ export class WebsitesController {
   @HttpCode(HttpStatus.OK)
   @UseGuards(CsrfGuard)
   @Roles(MembershipRole.ADMIN)
-  restart(
-    @CurrentUser() user: AuthenticatedUser,
-    @Param('id', ParseUUIDPipe) id: string,
-  ) {
+  restart(@CurrentUser() user: AuthenticatedUser, @Param('id', ParseUUIDPipe) id: string) {
     return this.websites.restart(user.tenantId, user.userId, id);
   }
 
@@ -85,10 +70,7 @@ export class WebsitesController {
   @HttpCode(HttpStatus.OK)
   @UseGuards(CsrfGuard)
   @Roles(MembershipRole.ADMIN)
-  remove(
-    @CurrentUser() user: AuthenticatedUser,
-    @Param('id', ParseUUIDPipe) id: string,
-  ) {
+  remove(@CurrentUser() user: AuthenticatedUser, @Param('id', ParseUUIDPipe) id: string) {
     return this.websites.remove(user.tenantId, user.userId, id);
   }
 }

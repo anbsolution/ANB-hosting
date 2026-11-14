@@ -3,7 +3,8 @@ import Docker from 'dockerode';
 
 const SITE_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const HOST_PATTERN = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+const HOST_PATTERN =
+  /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 const ROUTE_PATTERN = /^"([^"]+)" "(anb-site-[0-9a-f-]+):8080";$/;
 
 export interface EngineConfig {
@@ -180,9 +181,9 @@ export class SiteManager {
         SecurityOpt: ['no-new-privileges:true'],
         ReadonlyRootfs: true,
         Tmpfs: {
-          '/tmp': 'rw,noexec,nosuid,size=16m',
-          '/var/cache/nginx': 'rw,noexec,nosuid,size=16m',
-          '/var/run': 'rw,noexec,nosuid,size=1m',
+          '/tmp': 'rw,noexec,nosuid,size=16m,uid=101,gid=101,mode=700',
+          '/var/cache/nginx': 'rw,noexec,nosuid,size=16m,uid=101,gid=101,mode=700',
+          '/var/run': 'rw,noexec,nosuid,size=1m,uid=101,gid=101,mode=700',
         },
         RestartPolicy: { Name: 'unless-stopped' },
         LogConfig: {
@@ -430,9 +431,6 @@ export function isValidHostname(hostname: string, domainSuffix: string): boolean
 
 function isNotFound(error: unknown): boolean {
   return (
-    typeof error === 'object' &&
-    error !== null &&
-    'statusCode' in error &&
-    error.statusCode === 404
+    typeof error === 'object' && error !== null && 'statusCode' in error && error.statusCode === 404
   );
 }

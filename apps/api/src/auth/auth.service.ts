@@ -1,8 +1,4 @@
-import {
-  ConflictException,
-  Injectable,
-  UnauthorizedException,
-} from '@nestjs/common';
+import { ConflictException, Injectable, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { MembershipRole } from '@prisma/client';
@@ -82,8 +78,7 @@ export class AuthService {
       where: { email },
       include: { memberships: { orderBy: { createdAt: 'asc' }, take: 1 } },
     });
-    const validPassword =
-      user !== null && (await argon2.verify(user.passwordHash, input.password));
+    const validPassword = user !== null && (await argon2.verify(user.passwordHash, input.password));
     if (!user || !validPassword || !user.memberships[0]) {
       throw new UnauthorizedException('Email or password is incorrect');
     }
@@ -113,7 +108,10 @@ export class AuthService {
   async getProfile(userId: string, tenantId: string): Promise<AuthProfile> {
     const membership = await this.prisma.membership.findUnique({
       where: { userId_tenantId: { userId, tenantId } },
-      include: { user: { select: { id: true, email: true } }, tenant: { select: { id: true, name: true } } },
+      include: {
+        user: { select: { id: true, email: true } },
+        tenant: { select: { id: true, name: true } },
+      },
     });
     if (!membership) throw new UnauthorizedException('Session is no longer valid');
     return { user: membership.user, tenant: membership.tenant, role: membership.role };

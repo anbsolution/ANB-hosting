@@ -35,11 +35,7 @@ export class HostingEngineClient {
     return this.request(`/v1/sites/${id}`, 'GET');
   }
 
-  private async request<T>(
-    path: string,
-    method: string,
-    body?: unknown,
-  ): Promise<T> {
+  private async request<T>(path: string, method: string, body?: unknown): Promise<T> {
     let response: Response;
     try {
       response = await fetch(`${this.baseUrl}${path}`, {
