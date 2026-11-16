@@ -159,6 +159,7 @@ private fun HostingApp(
                     refresh = { task { reload() } }, action = { id, action -> task {
                         withContext(Dispatchers.IO) { api.websiteAction(id, action) }; reload()
                     } },
+                    openLocalHosting = { localMode = true },
                     logout = { task { withContext(Dispatchers.IO) { api.logout() }; signedIn = false; profile = null; password = "" } },
                     changeServer = { configured = false; signedIn = false })
             }
@@ -219,7 +220,8 @@ private fun HostingApp(
 }
 
 @Composable private fun HomeScreen(profile: JSONObject?, stats: JSONObject, websites: JSONArray, tab: String, setTab: (String) -> Unit,
-    busy: Boolean, error: String, refresh: () -> Unit, action: (String, String) -> Unit, logout: () -> Unit, changeServer: () -> Unit) {
+    busy: Boolean, error: String, refresh: () -> Unit, action: (String, String) -> Unit,
+    openLocalHosting: () -> Unit, logout: () -> Unit, changeServer: () -> Unit) {
     val tenant = profile?.optJSONObject("tenant")?.optString("name").orEmpty().ifBlank { "Workspace" }
     val email = profile?.optJSONObject("user")?.optString("email").orEmpty()
     Column(Modifier.fillMaxSize()) {
@@ -233,6 +235,9 @@ private fun HostingApp(
         }
         Row(Modifier.fillMaxWidth().background(Color.White), horizontalArrangement = Arrangement.SpaceEvenly) {
             listOf("Overview", "Websites", "Account").forEach { item -> TextButton(onClick = { setTab(item) }) { Text(item, color = if (tab == item) Blue else Muted, fontWeight = if (tab == item) FontWeight.Bold else FontWeight.Normal) } }
+        }
+        TextButton(onClick = openLocalHosting, modifier = Modifier.fillMaxWidth().background(Color.White)) {
+            Text("Host websites on this phone · works offline")
         }
         if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
         ErrorMessage(error, Modifier.padding(horizontal = 16.dp))

@@ -1,5 +1,6 @@
 package com.anbhosting.app
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -46,10 +47,10 @@ import kotlinx.coroutines.withContext
 import java.text.DateFormat
 import java.util.Date
 
-private val LocalNavy = Color(0xFF101C3A)
-private val LocalBlue = Color(0xFF3157D5)
-private val LocalMuted = Color(0xFF718096)
-private val LocalGreen = Color(0xFF16865B)
+internal val LocalNavy = Color(0xFF101C3A)
+internal val LocalBlue = Color(0xFF3157D5)
+internal val LocalMuted = Color(0xFF718096)
+internal val LocalGreen = Color(0xFF16865B)
 
 @Composable
 internal fun LocalHostingScreen(
@@ -63,6 +64,7 @@ internal fun LocalHostingScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val fileManager = remember(store) { LocalFileManager(store) }
     var sites by remember { mutableStateOf(emptyList<LocalSite>()) }
     var events by remember { mutableStateOf(emptyList<LocalHostingEvent>()) }
     var allowLan by remember { mutableStateOf(store.isLanSharingEnabled()) }
@@ -72,6 +74,9 @@ internal fun LocalHostingScreen(
     var error by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var phoneAddress by remember { mutableStateOf(LocalNetwork.wifiIpv4Address(context)?.hostAddress) }
+    var managedSite by remember { mutableStateOf<LocalSite?>(null) }
+
+    BackHandler(enabled = managedSite == null, onBack = onBack)
 
     fun reload() {
         scope.launch {
@@ -157,7 +162,14 @@ internal fun LocalHostingScreen(
 
     MaterialTheme(colorScheme = androidx.compose.material3.lightColorScheme(primary = LocalBlue)) {
         Surface(Modifier.fillMaxSize(), color = Color(0xFFF4F6FB)) {
-            Column(Modifier.fillMaxSize()) {
+            val selectedSite = managedSite
+            if (selectedSite != null) {
+                LocalFileManagerScreen(
+                    manager = fileManager,
+                    site = selectedSite,
+                    onBack = { managedSite = null; reload() },
+                )
+            } else Column(Modifier.fillMaxSize()) {
                 Column(Modifier.fillMaxWidth().background(LocalNavy).padding(20.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         TextButton(onClick = onBack) { Text("‹ Back", color = Color.White) }
@@ -274,7 +286,12 @@ internal fun LocalHostingScreen(
                                     } else {
                                         Button(onClick = { startSite(site) }, enabled = !busy) { Text("Start hosting") }
                                     }
-                                    TextButton(onClick = { pendingDelete = site }, enabled = !busy) { Text("Delete", color = Color(0xFFB42318)) }
+                                }
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    OutlinedButton(onClick = { managedSite = site }, enabled = !busy) { Text("Files") }
+                                    TextButton(onClick = { pendingDelete = site }, enabled = !busy) {
+                                        Text("Delete website", color = Color(0xFFB42318))
+                                    }
                                 }
                                 if (site.status == LocalHostingStore.STATUS_ACTIVE) {
                                     Text(

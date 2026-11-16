@@ -137,7 +137,12 @@ class LocalHostingService : Service() {
                     (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
                         .notify(NOTIFICATION_ID, buildNotification())
                 } catch (error: Exception) {
+                    store.listSites().filter { it.status == LocalHostingStore.STATUS_ACTIVE }
+                        .forEach { store.setSiteStatus(it.id, LocalHostingStore.STATUS_STOPPED) }
                     store.recordEvent(null, "server.network_rebind_failed", error.message.orEmpty())
+                    (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
+                        .cancel(NOTIFICATION_ID)
+                    stopSelf()
                 }
             }
         }

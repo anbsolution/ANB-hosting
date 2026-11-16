@@ -13,14 +13,20 @@ import java.net.SocketException
 import java.net.URLDecoder
 import java.net.URLConnection
 import java.nio.charset.Charset
+import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.ConcurrentHashMap
 
 /** Read-only HTTP server for app-owned static website files. */
 class LocalStaticServer(private val context: Context, private val store: LocalHostingStore) {
     @Volatile private var socket: ServerSocket? = null
     private var acceptExecutor: ExecutorService? = null
     private var clientExecutor: ExecutorService? = null
+    private val clients = ConcurrentHashMap.newKeySet<Socket>()
 
     @Synchronized
     fun start(allowLan: Boolean) {
@@ -34,7 +40,14 @@ class LocalStaticServer(private val context: Context, private val store: LocalHo
         listener.bind(InetSocketAddress(bindAddress, PORT), 32)
         socket = listener
         acceptExecutor = Executors.newSingleThreadExecutor()
-        clientExecutor = Executors.newFixedThreadPool(MAX_CLIENTS)
+        clientExecutor = ThreadPoolExecutor(
+            MAX_CLIENTS,
+            MAX_CLIENTS,
+            0L,
+            TimeUnit.MILLISECONDS,
+            ArrayBlockingQueue(MAX_QUEUED_CLIENTS),
+            ThreadPoolExecutor.AbortPolicy(),
+        )
         acceptExecutor?.execute { acceptConnections(listener) }
         val detail = wifiAddress?.let { "Wi-Fi sharing at ${it.hostAddress}" } ?: "localhost only"
         store.recordEvent(null, "server.started", detail)
@@ -47,6 +60,8 @@ class LocalStaticServer(private val context: Context, private val store: LocalHo
         } catch (_: IOException) {
         }
         socket = null
+        clients.toList().forEach { client -> runCatching { client.close() } }
+        clients.clear()
         acceptExecutor?.shutdownNow()
         clientExecutor?.shutdownNow()
         acceptExecutor = null
@@ -58,7 +73,25 @@ class LocalStaticServer(private val context: Context, private val store: LocalHo
             try {
                 val client = listener.accept()
                 client.soTimeout = SOCKET_TIMEOUT_MS
-                clientExecutor?.execute { handleClient(client) } ?: client.close()
+                clients.add(client)
+                val executor = clientExecutor
+                if (executor == null) {
+                    clients.remove(client)
+                    client.close()
+                } else {
+                    try {
+                        executor.execute {
+                            try {
+                                handleClient(client)
+                            } finally {
+                                clients.remove(client)
+                            }
+                        }
+                    } catch (_: RejectedExecutionException) {
+                        clients.remove(client)
+                        client.close()
+                    }
+                }
             } catch (_: SocketException) {
                 break
             } catch (error: IOException) {
@@ -192,6 +225,7 @@ class LocalStaticServer(private val context: Context, private val store: LocalHo
     companion object {
         const val PORT = 8787
         private const val MAX_CLIENTS = 4
+        private const val MAX_QUEUED_CLIENTS = 16
         private const val SOCKET_TIMEOUT_MS = 5_000
         private const val MAX_REQUEST_LINE_BYTES = 8_192
         private const val MAX_HEADER_LINE_BYTES = 8_192
