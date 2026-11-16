@@ -1,6 +1,7 @@
 package com.anbhosting.app
 
 import android.content.Context
+import android.database.sqlite.SQLiteDatabase
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -51,6 +52,8 @@ class LocalFileManagerTest {
 
         assertEquals("<h1>Edited offline</h1>", files.readText(site.id, "index.html"))
         assertEquals("body { color: blue; }", output.toString("UTF-8"))
+        assertEquals(2, files.measureUsage(site).fileCount)
+        assertEquals(site.root.resolve("index.html").length() + site.root.resolve("assets/style.css").length(), files.measureUsage(site).storedBytes)
         files.delete(site.id, "assets")
         assertFalse(site.root.resolve("assets").exists())
     }
@@ -89,5 +92,22 @@ class LocalFileManagerTest {
         }
         assertFalse(site.root.resolve("outside.txt").exists())
         assertFalse(site.root.resolve("unzipped").exists())
+    }
+
+    @Test
+    fun upgradesExistingLocalCatalogToTrafficTracking() {
+        store.close()
+        context.deleteDatabase("anb-local-hosting.db")
+        val database = SQLiteDatabase.openOrCreateDatabase(
+            context.getDatabasePath("anb-local-hosting.db").also { it.parentFile?.mkdirs() },
+            null,
+        )
+        database.version = 1
+        database.close()
+
+        store = LocalHostingStore(context)
+        store.recordTraffic("legacy-site", 1536)
+
+        assertEquals(1536L, store.trafficLast30Days("legacy-site"))
     }
 }

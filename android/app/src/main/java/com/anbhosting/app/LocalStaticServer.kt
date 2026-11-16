@@ -101,40 +101,115 @@ class LocalStaticServer(private val context: Context, private val store: LocalHo
     }
 
     private fun handleClient(client: Socket) {
-        client.use { connection ->
-            try {
-                val input = connection.getInputStream()
-                val requestLine = readHttpLine(input, MAX_REQUEST_LINE_BYTES)
-                    ?: return sendError(connection, 400, "Bad Request")
-                val parts = requestLine.split(' ', limit = 3)
-                if (parts.size != 3 || !parts[2].startsWith("HTTP/1.")) {
-                    return sendError(connection, 400, "Bad Request")
-                }
-                var headerBytes = 0
-                while (true) {
-                    val line = readHttpLine(input, MAX_HEADER_LINE_BYTES)
-                        ?: return sendError(connection, 400, "Bad Request")
-                    headerBytes += line.length
-                    if (headerBytes > MAX_HEADER_BYTES) return sendError(connection, 431, "Headers Too Large")
-                    if (line.isEmpty()) break
-                }
+        var requestMethod = ""
+        var requestPath = ""
+        var requestSiteId: String? = null
+        var responseStatus = 0
+        var responseBytes = 0L
+        var failureMessage: String? = null
+        try {
+            client.use { connection ->
+                try {
+                    val input = connection.getInputStream()
+                    val requestLine = readHttpLine(input, MAX_REQUEST_LINE_BYTES)
+                        ?: run {
+                            responseStatus = 400
+                            responseBytes = sendError(connection, 400, "Bad Request", requestMethod == "HEAD")
+                            return
+                        }
+                    val parts = requestLine.split(' ', limit = 3)
+                    if (parts.size >= 2) {
+                        requestMethod = parts[0].uppercase().take(MAX_LOG_METHOD_CHARS)
+                        requestPath = sanitizeLogPath(parts[1])
+                        requestSiteId = lookupSiteId(parts[1])
+                    }
+                    if (parts.size != 3 || !parts[2].startsWith("HTTP/1.")) {
+                        responseStatus = 400
+                        responseBytes = sendError(connection, 400, "Bad Request", requestMethod == "HEAD")
+                        return
+                    }
+                    var headerBytes = 0
+                    while (true) {
+                        val line = readHttpLine(input, MAX_HEADER_LINE_BYTES)
+                            ?: run {
+                                responseStatus = 400
+                                responseBytes = sendError(connection, 400, "Bad Request", requestMethod == "HEAD")
+                                return
+                            }
+                        headerBytes += line.length
+                        if (headerBytes > MAX_HEADER_BYTES) {
+                            responseStatus = 431
+                            responseBytes = sendError(connection, 431, "Headers Too Large", requestMethod == "HEAD")
+                            return
+                        }
+                        if (line.isEmpty()) break
+                    }
 
-                val method = parts[0].uppercase()
-                if (method != "GET" && method != "HEAD") return sendError(connection, 405, "Method Not Allowed")
-                val path = resolveRequestPath(parts[1]) ?: return sendError(connection, 400, "Bad Request")
-                when (path) {
-                    ForbiddenPath -> sendError(connection, 403, "Forbidden")
-                    MissingPath -> sendError(connection, 404, "Not Found")
-                    is ResolvedPath -> sendFile(connection, path.file, method == "HEAD")
+                    val method = parts[0].uppercase()
+                    if (method != "GET" && method != "HEAD") {
+                        responseStatus = 405
+                        responseBytes = sendError(connection, 405, "Method Not Allowed", requestMethod == "HEAD")
+                        return
+                    }
+                    val path = resolveRequestPath(parts[1]) ?: run {
+                        responseStatus = 400
+                        responseBytes = sendError(connection, 400, "Bad Request", requestMethod == "HEAD")
+                        return
+                    }
+                    when (path) {
+                        ForbiddenPath -> {
+                            responseStatus = 403
+                            responseBytes = sendError(connection, 403, "Forbidden", method == "HEAD")
+                        }
+                        MissingPath -> {
+                            responseStatus = 404
+                            responseBytes = sendError(connection, 404, "Not Found", method == "HEAD")
+                        }
+                        is ResolvedPath -> {
+                            responseStatus = 200
+                            responseBytes = sendFile(connection, path.file, method == "HEAD")
+                        }
+                    }
+                } catch (error: IOException) {
+                    failureMessage = error.message.orEmpty()
+                } catch (error: Exception) {
+                    responseStatus = 500
+                    failureMessage = error.message.orEmpty()
+                    responseBytes = runCatching {
+                        sendError(connection, 500, "Internal Server Error", requestMethod == "HEAD")
+                    }.getOrDefault(0L)
+                } finally {
+                    if (requestPath.isNotBlank()) {
+                        val action = when {
+                            failureMessage != null -> "request.failed"
+                            responseStatus >= 400 -> "request.error"
+                            else -> "request.served"
+                        }
+                        val status = if (responseStatus == 0) "connection-failed" else responseStatus.toString()
+                        val detail = "${requestMethod.ifBlank { "UNKNOWN" }} $requestPath → $status" +
+                            failureMessage?.takeIf(String::isNotBlank)?.let { " (${it.take(160)})" }.orEmpty()
+                        runCatching { store.recordEvent(requestSiteId, action, detail) }
+                        if (requestSiteId != null && responseStatus == 200 && responseBytes > 0) {
+                            runCatching { store.recordTraffic(requestSiteId!!, responseBytes) }
+                        }
+                    }
                 }
-            } catch (error: IOException) {
-                store.recordEvent(null, "server.request_failed", error.message.orEmpty())
-            } catch (error: Exception) {
-                store.recordEvent(null, "server.request_failed", error.message.orEmpty())
-                runCatching { sendError(connection, 500, "Internal Server Error") }
             }
+        } catch (_: IOException) {
+            // Closing a client socket can fail after its request was already logged.
         }
     }
+
+    private fun lookupSiteId(target: String): String? {
+        val parts = target.substringBefore('?').substringBefore('#').split('/')
+        if (parts.size < 3 || parts[1] != "s") return null
+        val slug = decodePathPart(parts[2]) ?: return null
+        return store.findSiteBySlug(slug)?.id
+    }
+
+    private fun sanitizeLogPath(target: String): String = target.substringBefore('?')
+        .filter { it.code >= 0x20 && it.code != 0x7f }
+        .take(MAX_LOG_PATH_CHARS)
 
     private fun resolveRequestPath(target: String): PathResult? {
         if (!target.startsWith('/') || target.startsWith("//")) return null
@@ -166,28 +241,40 @@ class LocalStaticServer(private val context: Context, private val store: LocalHo
         null
     }
 
-    private fun sendFile(socket: Socket, file: File, headOnly: Boolean) {
-        val mime = URLConnection.guessContentTypeFromName(file.name) ?: when (file.extension.lowercase()) {
+    private fun sendFile(socket: Socket, file: File, headOnly: Boolean): Long {
+        val mime = when (file.extension.lowercase()) {
             "html", "htm" -> "text/html; charset=utf-8"
             "css" -> "text/css; charset=utf-8"
             "js", "mjs" -> "text/javascript; charset=utf-8"
             "json", "webmanifest" -> "application/json; charset=utf-8"
+            "txt", "md" -> "text/plain; charset=utf-8"
+            "xml" -> "application/xml; charset=utf-8"
             "svg" -> "image/svg+xml"
             "wasm" -> "application/wasm"
-            else -> "application/octet-stream"
+            "png" -> "image/png"
+            "jpg", "jpeg" -> "image/jpeg"
+            "gif" -> "image/gif"
+            "webp" -> "image/webp"
+            "ico" -> "image/x-icon"
+            "pdf" -> "application/pdf"
+            "mp4" -> "video/mp4"
+            "mp3" -> "audio/mpeg"
+            else -> URLConnection.guessContentTypeFromName(file.name) ?: "application/octet-stream"
         }
         val output = BufferedOutputStream(socket.getOutputStream())
         writeHeaders(output, 200, "OK", mime, file.length())
-        if (!headOnly) FileInputStream(file).use { it.copyTo(output) }
+        val bytesSent = if (!headOnly) FileInputStream(file).use { it.copyTo(output) } else 0L
         output.flush()
+        return bytesSent
     }
 
-    private fun sendError(socket: Socket, status: Int, message: String) {
+    private fun sendError(socket: Socket, status: Int, message: String, headOnly: Boolean = false): Long {
         val body = "<h1>$status $message</h1>".toByteArray(Charsets.UTF_8)
         val output = BufferedOutputStream(socket.getOutputStream())
         writeHeaders(output, status, message, "text/html; charset=utf-8", body.size.toLong())
-        output.write(body)
+        if (!headOnly) output.write(body)
         output.flush()
+        return if (headOnly) 0L else body.size.toLong()
     }
 
     private fun writeHeaders(
@@ -230,5 +317,7 @@ class LocalStaticServer(private val context: Context, private val store: LocalHo
         private const val MAX_REQUEST_LINE_BYTES = 8_192
         private const val MAX_HEADER_LINE_BYTES = 8_192
         private const val MAX_HEADER_BYTES = 16_384
+        private const val MAX_LOG_PATH_CHARS = 200
+        private const val MAX_LOG_METHOD_CHARS = 10
     }
 }

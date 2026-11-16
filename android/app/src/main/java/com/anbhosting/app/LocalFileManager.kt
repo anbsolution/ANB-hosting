@@ -19,8 +19,29 @@ data class LocalFileEntry(
     val modifiedAt: Long,
 )
 
+data class LocalSiteUsage(
+    val storedBytes: Long,
+    val fileCount: Int,
+    val trafficLast30DaysBytes: Long,
+)
+
 /** File operations stay inside a website's app-private root. */
 class LocalFileManager(private val store: LocalHostingStore) {
+    fun measureUsage(site: LocalSite): LocalSiteUsage {
+        val root = site.root.canonicalFile
+        check(root.parentFile == store.siteRoot(site.slug).parentFile?.canonicalFile) {
+            "Website storage path is invalid."
+        }
+        var bytes = 0L
+        var files = 0
+        root.walkTopDown().forEach { file ->
+            if (file == root || Files.isSymbolicLink(file.toPath()) || !file.isFile) return@forEach
+            bytes = if (Long.MAX_VALUE - bytes < file.length()) Long.MAX_VALUE else bytes + file.length()
+            if (files < Int.MAX_VALUE) files += 1
+        }
+        return LocalSiteUsage(bytes, files, store.trafficLast30Days(site.id))
+    }
+
     fun list(siteId: String, relativeDirectory: String = ""): List<LocalFileEntry> {
         val root = siteRoot(siteId)
         val directory = resolve(root, relativeDirectory)

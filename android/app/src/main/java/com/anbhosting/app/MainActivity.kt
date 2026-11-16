@@ -10,6 +10,8 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.setContent
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.whenResumed
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -64,6 +66,26 @@ class MainActivity : ComponentActivity() {
                 },
                 onOpenPreview = ::openPreview,
             )
+        }
+        lifecycleScope.launch {
+            val hasActiveLocalSites = withContext(Dispatchers.IO) {
+                store.listSites().any { it.status == LocalHostingStore.STATUS_ACTIVE }
+            }
+            if (hasActiveLocalSites && !LocalHostingService.serverRunning) {
+                lifecycle.whenResumed {
+                    requestHostingPermission(
+                        onGranted = { startLocalHostingService() },
+                        onDenied = {
+                            lifecycleScope.launch(Dispatchers.IO) {
+                                store.listSites().filter { it.status == LocalHostingStore.STATUS_ACTIVE }
+                                    .forEach { store.setSiteStatus(it.id, LocalHostingStore.STATUS_STOPPED) }
+                            }
+                            stopService(Intent(this@MainActivity, LocalHostingService::class.java))
+                            Toast.makeText(this@MainActivity, "Local hosting was stopped because notifications are disabled.", Toast.LENGTH_LONG).show()
+                        },
+                    )
+                }
+            }
         }
     }
 

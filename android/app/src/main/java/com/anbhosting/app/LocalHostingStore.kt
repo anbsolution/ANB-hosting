@@ -5,6 +5,7 @@ import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import java.io.File
+import java.time.LocalDate
 import java.util.UUID
 
 data class LocalSite(
@@ -54,10 +55,11 @@ class LocalHostingStore(context: Context) : SQLiteOpenHelper(
             )""".trimIndent(),
         )
         db.execSQL("CREATE INDEX events_created_at_idx ON events(created_at DESC)")
+        createTrafficTable(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        // Schema upgrades are versioned here; existing site files are never dropped.
+        if (oldVersion < 2) createTrafficTable(db)
     }
 
     fun listSites(): List<LocalSite> {
@@ -166,6 +168,7 @@ class LocalHostingStore(context: Context) : SQLiteOpenHelper(
         }
         check(!root.exists() || root.deleteRecursively()) { "Website files could not be deleted." }
         writableDatabase.delete("sites", "id = ?", arrayOf(id))
+        writableDatabase.delete("daily_traffic", "site_id = ?", arrayOf(id))
         recordEvent(id, "website.deleted", slug)
     }
 
@@ -201,6 +204,48 @@ class LocalHostingStore(context: Context) : SQLiteOpenHelper(
         )
     }
 
+    fun recordTraffic(siteId: String, bytes: Long) {
+        if (bytes <= 0) return
+        val day = LocalDate.now().toString()
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            val update = db.compileStatement("UPDATE daily_traffic SET bytes = bytes + ? WHERE site_id = ? AND day = ?")
+            try {
+                update.bindLong(1, bytes)
+                update.bindString(2, siteId)
+                update.bindString(3, day)
+                if (update.executeUpdateDelete() == 0) {
+                    val values = ContentValues().apply {
+                        put("site_id", siteId)
+                        put("day", day)
+                        put("bytes", bytes)
+                    }
+                    db.insertOrThrow("daily_traffic", null, values)
+                }
+            } finally {
+                update.close()
+            }
+            db.delete("daily_traffic", "day < ?", arrayOf(LocalDate.now().minusDays(29).toString()))
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
+
+    fun trafficLast30Days(siteId: String): Long {
+        val since = LocalDate.now().minusDays(29).toString()
+        return readableDatabase.query(
+            "daily_traffic",
+            arrayOf("SUM(bytes)"),
+            "site_id = ? AND day >= ?",
+            arrayOf(siteId, since),
+            null,
+            null,
+            null,
+        ).use { cursor -> if (cursor.moveToFirst()) cursor.getLong(0) else 0L }
+    }
+
     fun isLanSharingEnabled(): Boolean = preferences.getBoolean(PREF_LAN_SHARING, false)
 
     fun setLanSharingEnabled(enabled: Boolean) {
@@ -225,11 +270,23 @@ class LocalHostingStore(context: Context) : SQLiteOpenHelper(
         )
     }
 
+    private fun createTrafficTable(db: SQLiteDatabase) {
+        db.execSQL(
+            """CREATE TABLE daily_traffic (
+                site_id TEXT NOT NULL,
+                day TEXT NOT NULL,
+                bytes INTEGER NOT NULL,
+                PRIMARY KEY(site_id, day)
+            )""".trimIndent(),
+        )
+        db.execSQL("CREATE INDEX daily_traffic_day_idx ON daily_traffic(day)")
+    }
+
     companion object {
         const val STATUS_ACTIVE = "ACTIVE"
         const val STATUS_STOPPED = "STOPPED"
         private const val DATABASE_NAME = "anb-local-hosting.db"
-        private const val DATABASE_VERSION = 1
+        private const val DATABASE_VERSION = 2
         private const val PREFERENCES_NAME = "local-hosting-preferences"
         private const val PREF_LAN_SHARING = "lan-sharing-enabled"
     }

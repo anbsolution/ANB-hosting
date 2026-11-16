@@ -52,6 +52,13 @@ internal val LocalBlue = Color(0xFF3157D5)
 internal val LocalMuted = Color(0xFF718096)
 internal val LocalGreen = Color(0xFF16865B)
 
+private data class LocalHostingSnapshot(
+    val sites: List<LocalSite>,
+    val events: List<LocalHostingEvent>,
+    val usageBySite: Map<String, LocalSiteUsage>,
+    val deviceMetrics: LocalDeviceMetrics,
+)
+
 @Composable
 internal fun LocalHostingScreen(
     store: LocalHostingStore,
@@ -65,7 +72,10 @@ internal fun LocalHostingScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val fileManager = remember(store) { LocalFileManager(store) }
+    val resourceMonitor = remember(context) { LocalResourceMonitor(context) }
     var sites by remember { mutableStateOf(emptyList<LocalSite>()) }
+    var usageBySite by remember { mutableStateOf(emptyMap<String, LocalSiteUsage>()) }
+    var deviceMetrics by remember { mutableStateOf(LocalDeviceMetrics(0L, 0L, null)) }
     var events by remember { mutableStateOf(emptyList<LocalHostingEvent>()) }
     var allowLan by remember { mutableStateOf(store.isLanSharingEnabled()) }
     var siteName by remember { mutableStateOf("") }
@@ -80,13 +90,26 @@ internal fun LocalHostingScreen(
 
     fun reload() {
         scope.launch {
-            val result = withContext(Dispatchers.IO) {
-                store.listSites() to store.recentEvents()
+            try {
+                val result = withContext(Dispatchers.IO) {
+                    val allSites = store.listSites()
+                    LocalHostingSnapshot(
+                        sites = allSites,
+                        events = store.recentEvents(),
+                        usageBySite = allSites.associate { it.id to fileManager.measureUsage(it) },
+                        deviceMetrics = resourceMonitor.sample(),
+                    )
+                }
+                sites = result.sites
+                events = result.events
+                usageBySite = result.usageBySite
+                deviceMetrics = result.deviceMetrics
+                allowLan = store.isLanSharingEnabled()
+                phoneAddress = LocalNetwork.wifiIpv4Address(context)?.hostAddress
+                error = ""
+            } catch (failure: Exception) {
+                error = failure.message ?: "Local hosting information could not be loaded."
             }
-            sites = result.first
-            events = result.second
-            allowLan = store.isLanSharingEnabled()
-            phoneAddress = LocalNetwork.wifiIpv4Address(context)?.hostAddress
         }
     }
 
@@ -227,6 +250,18 @@ internal fun LocalHostingScreen(
                     }
 
                     item {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            UsageMetric("ANB RAM", formatBytes(deviceMetrics.appMemoryBytes), Modifier.weight(1f))
+                            UsageMetric(
+                                "App CPU",
+                                deviceMetrics.appCpuPercent?.let { "${"%.1f".format(it)}%" } ?: "Sample again",
+                                Modifier.weight(1f),
+                            )
+                            UsageMetric("Free storage", formatBytes(deviceMetrics.freeStorageBytes), Modifier.weight(1f))
+                        }
+                    }
+
+                    item {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Column(Modifier.weight(1f)) {
                                 Text("Local websites", color = LocalNavy, fontSize = 20.sp, fontWeight = FontWeight.Bold)
@@ -258,6 +293,15 @@ internal fun LocalHostingScreen(
                                     Column(Modifier.weight(1f)) {
                                         Text(site.name, color = LocalNavy, fontWeight = FontWeight.Bold, fontSize = 16.sp)
                                         Text(site.slug, color = LocalMuted, fontSize = 12.sp)
+                                        val usage = usageBySite[site.id]
+                                        Text(
+                                            usage?.let {
+                                                "${it.fileCount} files · ${formatBytes(it.storedBytes)} · " +
+                                                    "${formatBytes(it.trafficLast30DaysBytes)} served/30d"
+                                            } ?: "Measuring local usage…",
+                                            color = LocalMuted,
+                                            fontSize = 10.sp,
+                                        )
                                     }
                                     Row(verticalAlignment = Alignment.CenterVertically) {
                                         Spacer(Modifier.size(7.dp).background(
@@ -371,5 +415,22 @@ internal fun LocalHostingScreen(
             },
             dismissButton = { TextButton(onClick = { pendingDelete = null }) { Text("Cancel") } },
         )
+    }
+}
+
+private fun formatBytes(bytes: Long): String = when {
+    bytes < 1024 -> "$bytes B"
+    bytes < 1024 * 1024 -> "${bytes / 1024} KiB"
+    bytes < 1024L * 1024 * 1024 -> "${bytes / (1024 * 1024)} MiB"
+    else -> "${bytes / (1024L * 1024 * 1024)} GiB"
+}
+
+@Composable
+private fun UsageMetric(label: String, value: String, modifier: Modifier = Modifier) {
+    Card(modifier = modifier, colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(14.dp)) {
+        Column(Modifier.fillMaxWidth().padding(10.dp)) {
+            Text(label, color = LocalMuted, fontSize = 10.sp)
+            Text(value, color = LocalNavy, fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+        }
     }
 }

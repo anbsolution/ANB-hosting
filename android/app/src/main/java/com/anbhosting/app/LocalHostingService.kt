@@ -51,6 +51,7 @@ class LocalHostingService : Service() {
             executor.execute {
                 store.listSites().filter { it.status == LocalHostingStore.STATUS_ACTIVE }
                     .forEach { store.setSiteStatus(it.id, LocalHostingStore.STATUS_STOPPED) }
+                serverRunning = false
                 stopSelf(startId)
             }
             return START_NOT_STICKY
@@ -70,17 +71,21 @@ class LocalHostingService : Service() {
         executor.execute {
             val activeSites = store.listSites().filter { it.status == LocalHostingStore.STATUS_ACTIVE }
             if (activeSites.isEmpty()) {
+                serverRunning = false
                 stopSelf(startId)
                 return@execute
             }
             if (intent?.action == ACTION_RECONFIGURE) {
+                serverRunning = false
                 server?.stop()
                 server = null
             }
             if (server == null) {
                 try {
                     server = LocalStaticServer(this, store).also { it.start(store.isLanSharingEnabled()) }
+                    serverRunning = true
                 } catch (error: Exception) {
+                    serverRunning = false
                     activeSites.forEach { store.setSiteStatus(it.id, LocalHostingStore.STATUS_STOPPED) }
                     store.recordEvent(null, "server.start_failed", error.message.orEmpty())
                     stopSelf(startId)
@@ -99,6 +104,7 @@ class LocalHostingService : Service() {
         }
         server?.stop()
         server = null
+        serverRunning = false
         executor.shutdownNow()
         super.onDestroy()
     }
@@ -130,13 +136,16 @@ class LocalHostingService : Service() {
         runCatching {
             executor.execute {
                 if (store.listSites().none { it.status == LocalHostingStore.STATUS_ACTIVE }) return@execute
+                serverRunning = false
                 server?.stop()
                 server = null
                 try {
                     server = LocalStaticServer(this, store).also { it.start(true) }
+                    serverRunning = true
                     (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
                         .notify(NOTIFICATION_ID, buildNotification())
                 } catch (error: Exception) {
+                    serverRunning = false
                     store.listSites().filter { it.status == LocalHostingStore.STATUS_ACTIVE }
                         .forEach { store.setSiteStatus(it.id, LocalHostingStore.STATUS_STOPPED) }
                     store.recordEvent(null, "server.network_rebind_failed", error.message.orEmpty())
@@ -161,6 +170,10 @@ class LocalHostingService : Service() {
     }
 
     companion object {
+        @Volatile
+        var serverRunning: Boolean = false
+            private set
+
         const val ACTION_STOP = "com.anbhosting.app.action.STOP_LOCAL_HOSTING"
         const val ACTION_RECONFIGURE = "com.anbhosting.app.action.RECONFIGURE_LOCAL_HOSTING"
         private const val CHANNEL_ID = "anb_local_hosting"

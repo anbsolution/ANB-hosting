@@ -12,6 +12,7 @@ This is the first native Android client slice for the existing ANB Hosting platf
 - Local static HTTP server with localhost preview; optional read-only Wi-Fi sharing binds to the phone's Wi-Fi IPv4 address
 - User-visible foreground service for hosting lifecycle
 - App-private file manager with import/export, text editing, ZIP extraction, and ZIP backup/restore
+- Local request/error logs, per-site storage and 30-day served-payload totals, plus app RAM/CPU and free-storage samples
 
 The API currently authenticates using a short-lived HttpOnly session cookie. The app keeps that cookie in memory for the current process; signing in again may be required after the app is closed or the 15-minute server session expires. Persistent refresh sessions are not part of the existing API yet.
 
