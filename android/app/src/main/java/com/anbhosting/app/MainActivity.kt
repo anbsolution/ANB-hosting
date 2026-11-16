@@ -1,7 +1,14 @@
 package com.anbhosting.app
 
+import android.Manifest
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -33,16 +40,72 @@ private val Muted = Color(0xFF718096)
 private val Green = Color(0xFF16865B)
 
 class MainActivity : ComponentActivity() {
+    private var pendingPermissionCallbacks: Pair<() -> Unit, () -> Unit>? = null
+    private val notificationPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        val callbacks = pendingPermissionCallbacks
+        pendingPermissionCallbacks = null
+        if (granted) callbacks?.first?.invoke() else callbacks?.second?.invoke()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent { HostingApp(HostingApi()) }
+        val store = LocalHostingStore(applicationContext)
+        setContent {
+            HostingApp(
+                api = HostingApi(),
+                localStore = store,
+                onRequestHostingPermission = ::requestHostingPermission,
+                onStartHosting = { startLocalHostingService() },
+                onStopHosting = { stopService(Intent(this, LocalHostingService::class.java)) },
+                onReconfigureHosting = {
+                    startLocalHostingService(LocalHostingService.ACTION_RECONFIGURE)
+                },
+                onOpenPreview = ::openPreview,
+            )
+        }
+    }
+
+    private fun requestHostingPermission(onGranted: () -> Unit, onDenied: () -> Unit) {
+        if (Build.VERSION.SDK_INT < 33 ||
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+        ) {
+            onGranted()
+            return
+        }
+        pendingPermissionCallbacks = onGranted to onDenied
+        notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+    }
+
+    private fun startLocalHostingService(action: String? = null) {
+        val intent = Intent(this, LocalHostingService::class.java).apply { this.action = action }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(intent) else startService(intent)
+    }
+
+    private fun openPreview(url: String) {
+        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+        if (intent.resolveActivity(packageManager) == null) {
+            Toast.makeText(this, "No browser is available to preview this site.", Toast.LENGTH_LONG).show()
+        } else {
+            startActivity(intent)
+        }
     }
 }
 
 @Composable
-private fun HostingApp(api: HostingApi) {
+private fun HostingApp(
+    api: HostingApi,
+    localStore: LocalHostingStore,
+    onRequestHostingPermission: (onGranted: () -> Unit, onDenied: () -> Unit) -> Unit,
+    onStartHosting: () -> Unit,
+    onStopHosting: () -> Unit,
+    onReconfigureHosting: () -> Unit,
+    onOpenPreview: (String) -> Unit,
+) {
     var server by remember { mutableStateOf("") }
     var configured by remember { mutableStateOf(false) }
+    var localMode by remember { mutableStateOf(false) }
     var signedIn by remember { mutableStateOf(false) }
     var register by remember { mutableStateOf(false) }
     var email by remember { mutableStateOf("") }
@@ -73,7 +136,16 @@ private fun HostingApp(api: HostingApi) {
     MaterialTheme(colorScheme = lightColorScheme(primary = Blue, background = Page, surface = Color.White)) {
         Surface(Modifier.fillMaxSize(), color = Page) {
             when {
-                !configured -> ServerScreen(server, { server = it }, busy, error) {
+                localMode -> LocalHostingScreen(
+                    store = localStore,
+                    onBack = { localMode = false },
+                    onStartHosting = onStartHosting,
+                    onStopHosting = onStopHosting,
+                    onReconfigureHosting = onReconfigureHosting,
+                    onRequestHostingPermission = onRequestHostingPermission,
+                    onOpenPreview = onOpenPreview,
+                )
+                !configured -> ServerScreen(server, { server = it }, busy, error, onOpenLocal = { localMode = true }) {
                     task { api.setServer(server); if (server.isBlank()) throw IllegalArgumentException("Enter the server URL") else configured = true }
                 }
                 !signedIn -> AuthScreen(register, { register = it }, email, { email = it }, password, { password = it }, workspace, { workspace = it }, busy, error,
@@ -106,7 +178,14 @@ private fun HostingApp(api: HostingApi) {
     }
 }
 
-@Composable private fun ServerScreen(value: String, change: (String) -> Unit, busy: Boolean, error: String, next: () -> Unit) {
+@Composable private fun ServerScreen(
+    value: String,
+    change: (String) -> Unit,
+    busy: Boolean,
+    error: String,
+    onOpenLocal: () -> Unit,
+    next: () -> Unit,
+) {
     Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.Center) {
         Brand(); Spacer(Modifier.height(32.dp))
         Text("Connect your server", fontSize = 25.sp, fontWeight = FontWeight.Bold, color = Navy)
@@ -115,6 +194,9 @@ private fun HostingApp(api: HostingApi) {
         OutlinedTextField(value, change, Modifier.fillMaxWidth(), label = { Text("Server URL") }, placeholder = { Text("https://192.168.1.10:8443") }, singleLine = true)
         Text("For a local server, install its trusted CA certificate on this Android device first.", color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
         ErrorMessage(error); Spacer(Modifier.height(16.dp)); PrimaryButton("Continue", busy, next)
+        TextButton(onClick = onOpenLocal, modifier = Modifier.fillMaxWidth()) {
+            Text("Host websites on this phone · works offline")
+        }
     }
 }
 
