@@ -53,9 +53,30 @@ jobs:
         run: gradle -p android :app:testDebugUnitTest
       - name: Build Android debug APK
         run: gradle -p android :app:assembleDebug
+      - name: Build signed Android release APK when the existing key is configured
+        env:
+          ANB_RELEASE_KEYSTORE_BASE64: ${{ secrets.ANB_RELEASE_KEYSTORE_BASE64 }}
+          ANB_RELEASE_STORE_PASSWORD: ${{ secrets.ANB_RELEASE_STORE_PASSWORD }}
+          ANB_RELEASE_KEY_ALIAS: ${{ secrets.ANB_RELEASE_KEY_ALIAS }}
+          ANB_RELEASE_KEY_PASSWORD: ${{ secrets.ANB_RELEASE_KEY_PASSWORD }}
+        run: |
+          if [ -z "$ANB_RELEASE_KEYSTORE_BASE64" ] || [ -z "$ANB_RELEASE_STORE_PASSWORD" ] || [ -z "$ANB_RELEASE_KEY_ALIAS" ] || [ -z "$ANB_RELEASE_KEY_PASSWORD" ]; then
+            echo "Release APK skipped: signing secrets are not configured."
+            exit 0
+          fi
+          printf '%s' "$ANB_RELEASE_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/anb-release-key.jks"
+          chmod 600 "$RUNNER_TEMP/anb-release-key.jks"
+          export ANB_RELEASE_KEYSTORE_PATH="$RUNNER_TEMP/anb-release-key.jks"
+          gradle -p android :app:assembleRelease
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
           name: anb-hosting-android-debug
           path: android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+      - name: Upload signed Android release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: anb-hosting-android-release
+          path: android/app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: ignore
