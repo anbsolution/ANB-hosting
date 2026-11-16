@@ -1,0 +1,101 @@
+name: Android Python runtime feasibility
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/android-python-runtime.yml
+      - .github/workflows/ci.yml
+      - android/**
+      - DEVELOPMENT-ROADMAP.md
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/android-python-runtime.yml
+      - .github/workflows/ci.yml
+      - android/**
+      - DEVELOPMENT-ROADMAP.md
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cpython-android-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      CROSS_BUILD_DIR: ${{ runner.temp }}/anb-cpython-cross-build
+    steps:
+      - name: Check out ANB Hosting
+        uses: actions/checkout@v4
+
+      - name: Check out the pinned CPython release
+        uses: actions/checkout@v4
+        with:
+          repository: python/cpython
+          ref: v3.14.10
+          path: cpython
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Expose the SDK command line tools at CPython's expected path
+        shell: bash
+        run: |
+          ANDROID_SDK_DIR="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          if [ -z "$ANDROID_SDK_DIR" ]; then
+            echo "Android SDK root was not configured."
+            exit 1
+          fi
+          echo "ANDROID_HOME=$ANDROID_SDK_DIR" >> "$GITHUB_ENV"
+          SDKMANAGER_PATH="$(command -v sdkmanager || true)"
+          if [ -z "$SDKMANAGER_PATH" ]; then
+            echo "Android sdkmanager was not added to PATH."
+            exit 1
+          fi
+          SDKMANAGER_BIN="$(dirname "$SDKMANAGER_PATH")"
+          SDKMANAGER_HOME="$(dirname "$SDKMANAGER_BIN")"
+          mkdir -p "$ANDROID_SDK_DIR/cmdline-tools"
+          if [ ! -x "$ANDROID_SDK_DIR/cmdline-tools/latest/bin/sdkmanager" ]; then
+            ln -s "$SDKMANAGER_HOME" "$ANDROID_SDK_DIR/cmdline-tools/latest"
+          fi
+
+      - name: Download and verify official CPython Android packages
+        shell: bash
+        run: |
+          mkdir -p "$CROSS_BUILD_DIR/aarch64-linux-android" "$CROSS_BUILD_DIR/x86_64-linux-android"
+          curl --fail --location --retry 3 --output "$RUNNER_TEMP/python-3.14.10-aarch64-linux-android.tar.gz" \
+            https://www.python.org/ftp/python/3.14.10/python-3.14.10-aarch64-linux-android.tar.gz
+          curl --fail --location --retry 3 --output "$RUNNER_TEMP/python-3.14.10-x86_64-linux-android.tar.gz" \
+            https://www.python.org/ftp/python/3.14.10/python-3.14.10-x86_64-linux-android.tar.gz
+          printf '%s  %s\n' \
+            '423c80b957330cf0ebb92b9b20f2294c292144a441bdb0ceb8c69d14928e569b' \
+            "$RUNNER_TEMP/python-3.14.10-aarch64-linux-android.tar.gz" \
+            '6ebda1fc3f28efc5861cad397254e8ce5d81ba4f83a3cb6a0c124c3826a0e14c' \
+            "$RUNNER_TEMP/python-3.14.10-x86_64-linux-android.tar.gz" | sha256sum --check --status
+          tar --extract --gzip --file "$RUNNER_TEMP/python-3.14.10-aarch64-linux-android.tar.gz" \
+            --directory "$CROSS_BUILD_DIR/aarch64-linux-android"
+          tar --extract --gzip --file "$RUNNER_TEMP/python-3.14.10-x86_64-linux-android.tar.gz" \
+            --directory "$CROSS_BUILD_DIR/x86_64-linux-android"
+          test -s "$CROSS_BUILD_DIR/aarch64-linux-android/prefix/lib/libpython3.14.so"
+          test -s "$CROSS_BUILD_DIR/x86_64-linux-android/prefix/lib/libpython3.14.so"
+          test -s "$CROSS_BUILD_DIR/aarch64-linux-android/prefix/include/python3.14/Python.h"
+          test -s "$CROSS_BUILD_DIR/x86_64-linux-android/prefix/include/python3.14/Python.h"
+
+      - name: Smoke-test CPython on a managed Android emulator
+        shell: bash
+        run: >-
+          python3 cpython/Android/android.py test --managed maxVersion --
+          -c 'import socket, sqlite3, ssl, sys; assert sys.version_info[:2] == (3, 14); assert socket.socket; assert sqlite3.sqlite_version; assert ssl.OPENSSL_VERSION; print("CPython Android embedding smoke test passed")'

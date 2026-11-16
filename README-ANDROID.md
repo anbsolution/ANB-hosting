@@ -22,4 +22,6 @@ On-device mode is independent of the API and stores metadata and website files i
 
 The GitHub Actions `android` job runs Android unit tests and builds a debug APK with JDK 17 and Gradle 8.9. It uploads the artifact as `anb-hosting-android-debug`.
 
+The separate `Android Python runtime feasibility` workflow verifies the SHA-256 checksums for the official CPython 3.14.10 Android packages and runs an embedding smoke test in CPython's managed Android testbed. This checks that the upstream runtime works on an Android emulator; it does not package Python in the ANB app or enable Python website hosting.
+
 The workflow can build and upload a signed release APK when these secrets are configured: `ANB_RELEASE_KEYSTORE_BASE64`, `ANB_RELEASE_STORE_PASSWORD`, `ANB_RELEASE_KEY_ALIAS`, `ANB_RELEASE_KEY_PASSWORD`, and `ANB_RELEASE_CERT_SHA256`. Use the existing app signing key and its SHA-256 certificate fingerprint. CI verifies the APK fingerprint before uploading it. No signing key is configured in the repository yet, so CI skips the release APK and builds only the debug artifact. A debug APK keeps the package ID `com.anbhosting.app`, but APKs signed with different keys cannot update one another. The app version code is now 2; an installed version 1 still requires the matching signing key to accept the update.
