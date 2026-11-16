@@ -198,17 +198,26 @@ internal class LocalGithubDeployer(
         websiteName: String,
         publishDirectory: String = "",
         selectedRef: String = "",
+        targetSiteId: String? = null,
     ): LocalSite {
         val repository = PublicGithubRepository.parse(repositoryUrl)
         val name = websiteName.trim()
-        require(name.length in 2..80) { "Website name must be 2 to 80 characters." }
+        val targetSite = targetSiteId?.let { store.findSite(it) ?: throw IllegalArgumentException("Website no longer exists.") }
+        if (targetSite == null) require(name.length in 2..80) { "Website name must be 2 to 80 characters." }
+        if (targetSite != null) check(targetSite.status == LocalHostingStore.STATUS_STOPPED) {
+            "Stop the website before deploying an update."
+        }
         val requestedRef = GithubDeploymentRef.validateSelected(selectedRef)
         store.recordEvent(null, "deployment.started", "GitHub ${repository.fullName}")
 
         cleanupStaleArchives()
         val archive = File(context.cacheDir, "anb-github-${UUID.randomUUID()}.zip")
-        var site: LocalSite? = null
-        var archiveInstalled = false
+        var site = targetSite
+        var createdSite = false
+        var backup: File? = null
+        var filesInstalled = false
+        var deploymentRecorded = false
+        var retainBackupForRecovery = false
         try {
             val metadata = github.repository(repository)
             require(!metadata.isPrivate) { "Private GitHub repositories are not supported yet." }
@@ -219,17 +228,53 @@ internal class LocalGithubDeployer(
             github.downloadCommit(repository, commitSha, archive)
             store.recordEvent(null, "deployment.archive_downloaded", "GitHub ${repository.fullName} · ${archive.length()} bytes")
 
-            site = store.createSite(name)
-            files.installGithubArchive(site.id, archive.inputStream(), publishDirectory)
-            archiveInstalled = true
-            store.recordEvent(
-                site.id,
-                "deployment.succeeded",
-                "GitHub ${repository.fullName} · $ref · $commitSha · ${publishDirectory.ifBlank { "/" }}",
+            if (site == null) {
+                site = store.createSite(name)
+                createdSite = true
+            }
+            val deploymentSite = checkNotNull(site)
+            val deploymentBackup = createDeploymentBackup(deploymentSite)
+            backup = deploymentBackup
+            files.installGithubArchive(deploymentSite.id, archive.inputStream(), publishDirectory)
+            filesInstalled = true
+            store.recordDeployment(
+                siteId = deploymentSite.id,
+                repository = repository.fullName,
+                ref = ref,
+                commitSha = commitSha,
+                backupFileName = deploymentBackup.name,
             )
-            return site
+            deploymentRecorded = true
+            runCatching {
+                store.recordEvent(
+                    deploymentSite.id,
+                    "deployment.succeeded",
+                    "GitHub ${repository.fullName} · $ref · $commitSha · ${publishDirectory.ifBlank { "/" }}",
+                )
+            }
+            runCatching {
+                store.pruneDeploymentHistory(deploymentSite.id, MAX_DEPLOYMENT_HISTORY)
+                    .forEach { fileName ->
+                        if (!backupFile(fileName).delete()) {
+                            store.recordEvent(deploymentSite.id, "deployment.backup_cleanup_failed", fileName)
+                        }
+                    }
+            }
+            return deploymentSite
         } catch (failure: Exception) {
-            if (!archiveInstalled && site != null) runCatching { store.deleteSite(site.id) }
+            val failedSite = site
+            val failedBackup = backup
+            val recoveryBackup = failedBackup?.takeIf { it.isFile }
+            if (filesInstalled && !deploymentRecorded && failedSite != null && recoveryBackup != null) {
+                val restored = runCatching { files.restoreBackup(failedSite.id, recoveryBackup.inputStream()) }.isSuccess
+                retainBackupForRecovery = !restored
+                if (retainBackupForRecovery) {
+                    runCatching { store.recordEvent(failedSite.id, "deployment.recovery_backup_retained", recoveryBackup.name) }
+                }
+            }
+            if (createdSite && failedSite != null && !retainBackupForRecovery) {
+                runCatching { store.deleteSite(failedSite.id) }
+            }
             runCatching {
                 store.recordEvent(
                     site?.id,
@@ -240,7 +285,50 @@ internal class LocalGithubDeployer(
             throw failure
         } finally {
             archive.delete()
+            if (!deploymentRecorded && !retainBackupForRecovery) backup?.delete()
         }
+    }
+
+    fun rollback(deploymentId: String, siteId: String): LocalSite {
+        val site = store.findSite(siteId) ?: throw IllegalArgumentException("Website no longer exists.")
+        check(site.status == LocalHostingStore.STATUS_STOPPED) { "Stop the website before rolling back a deployment." }
+        val latest = store.latestAppliedDeployment(siteId)
+            ?: throw IllegalArgumentException("There is no active GitHub deployment to roll back.")
+        require(latest.id == deploymentId) { "Only the latest active deployment can be rolled back." }
+        require(latest.backupFileName.matches(Regex("deploy-[a-f0-9-]{36}\\.zip"))) {
+            "Deployment backup name is invalid."
+        }
+        val backup = backupFile(latest.backupFileName)
+        check(backup.isFile) { "The deployment backup is missing from this phone." }
+        files.restoreBackup(site.id, backup.inputStream())
+        store.markDeploymentRolledBack(latest.id)
+        runCatching {
+            store.recordEvent(site.id, "deployment.rolled_back", "${latest.repository} · ${latest.ref} · ${latest.commitSha}")
+        }
+        return site
+    }
+
+    private fun createDeploymentBackup(site: LocalSite): File {
+        val directory = deploymentBackupDirectory()
+        check(directory.isDirectory || directory.mkdirs()) { "Deployment backup storage could not be created." }
+        val backup = File(directory, "deploy-${UUID.randomUUID()}.zip")
+        try {
+            files.createBackup(site.id, backup.outputStream())
+            require(backup.length() <= MAX_DEPLOYMENT_BACKUP_BYTES) {
+                "Website backup exceeds the 50 MiB deployment rollback limit."
+            }
+            return backup
+        } catch (failure: Exception) {
+            backup.delete()
+            throw failure
+        }
+    }
+
+    private fun deploymentBackupDirectory(): File = File(context.filesDir, "github-deployment-backups")
+
+    private fun backupFile(fileName: String): File {
+        require(fileName.matches(Regex("deploy-[a-f0-9-]{36}\\.zip"))) { "Deployment backup name is invalid." }
+        return File(deploymentBackupDirectory(), fileName)
     }
 
     private fun cleanupStaleArchives() {
@@ -252,5 +340,7 @@ internal class LocalGithubDeployer(
 
     companion object {
         private const val MAX_CACHED_ARCHIVE_AGE_MS = 24L * 60 * 60 * 1000
+        private const val MAX_DEPLOYMENT_BACKUP_BYTES = 50L * 1024 * 1024
+        private const val MAX_DEPLOYMENT_HISTORY = 3
     }
 }

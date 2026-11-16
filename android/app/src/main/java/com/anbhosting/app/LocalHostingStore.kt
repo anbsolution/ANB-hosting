@@ -23,6 +23,17 @@ data class LocalHostingEvent(
     val createdAt: Long,
 )
 
+data class LocalDeployment(
+    val id: String,
+    val siteId: String,
+    val repository: String,
+    val ref: String,
+    val commitSha: String,
+    val backupFileName: String,
+    val status: String,
+    val createdAt: Long,
+)
+
 /** App-private SQLite metadata and website storage for offline hosting. */
 class LocalHostingStore(context: Context) : SQLiteOpenHelper(
     context.applicationContext,
@@ -56,10 +67,12 @@ class LocalHostingStore(context: Context) : SQLiteOpenHelper(
         )
         db.execSQL("CREATE INDEX events_created_at_idx ON events(created_at DESC)")
         createTrafficTable(db)
+        createDeploymentTable(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion < 2) createTrafficTable(db)
+        if (oldVersion < 3) createDeploymentTable(db)
     }
 
     fun listSites(): List<LocalSite> {
@@ -83,6 +96,17 @@ class LocalHostingStore(context: Context) : SQLiteOpenHelper(
         arrayOf("id", "name", "slug", "status", "created_at"),
         "slug = ?",
         arrayOf(slug),
+        null,
+        null,
+        null,
+        "1",
+    ).use { cursor -> if (cursor.moveToFirst()) cursor.toLocalSite() else null }
+
+    fun findSite(id: String): LocalSite? = readableDatabase.query(
+        "sites",
+        arrayOf("id", "name", "slug", "status", "created_at"),
+        "id = ?",
+        arrayOf(id),
         null,
         null,
         null,
@@ -167,9 +191,111 @@ class LocalHostingStore(context: Context) : SQLiteOpenHelper(
             "Website folder is outside local storage."
         }
         check(!root.exists() || root.deleteRecursively()) { "Website files could not be deleted." }
+        val backupFileNames = readableDatabase.query(
+            "deployments",
+            arrayOf("backup_file"),
+            "site_id = ?",
+            arrayOf(id),
+            null,
+            null,
+            null,
+        ).use { cursor -> buildList { while (cursor.moveToNext()) add(cursor.getString(0)) } }
         writableDatabase.delete("sites", "id = ?", arrayOf(id))
         writableDatabase.delete("daily_traffic", "site_id = ?", arrayOf(id))
+        writableDatabase.delete("deployments", "site_id = ?", arrayOf(id))
+        backupFileNames.forEach { backupName ->
+            if (backupName.matches(Regex("deploy-[a-f0-9-]{36}\\.zip"))) {
+                File(appContext.filesDir, "github-deployment-backups/$backupName").delete()
+            }
+        }
         recordEvent(id, "website.deleted", slug)
+    }
+
+    fun latestAppliedDeployment(siteId: String): LocalDeployment? = readableDatabase.query(
+        "deployments",
+        DEPLOYMENT_COLUMNS,
+        "site_id = ? AND status = ?",
+        arrayOf(siteId, DEPLOYMENT_APPLIED),
+        null,
+        null,
+        "created_at DESC, rowid DESC",
+        "1",
+    ).use { cursor -> if (cursor.moveToFirst()) cursor.toLocalDeployment() else null }
+
+    fun deploymentHistory(siteId: String): List<LocalDeployment> = readableDatabase.query(
+        "deployments",
+        DEPLOYMENT_COLUMNS,
+        "site_id = ?",
+        arrayOf(siteId),
+        null,
+        null,
+        "created_at DESC, rowid DESC",
+        null,
+    ).use { cursor -> buildList { while (cursor.moveToNext()) add(cursor.toLocalDeployment()) } }
+
+    fun recordDeployment(
+        siteId: String,
+        repository: String,
+        ref: String,
+        commitSha: String,
+        backupFileName: String,
+    ): LocalDeployment {
+        require(repository.length in 3..200) { "Repository name is invalid." }
+        require(ref.length in 1..255) { "Deployment reference is invalid." }
+        require(commitSha.matches(Regex("[a-fA-F0-9]{40}"))) { "Deployment commit SHA is invalid." }
+        require(backupFileName.matches(Regex("deploy-[a-f0-9-]{36}\\.zip"))) { "Deployment backup name is invalid." }
+        check(findSite(siteId) != null) { "Website no longer exists." }
+
+        val deployment = LocalDeployment(
+            id = UUID.randomUUID().toString(),
+            siteId = siteId,
+            repository = repository,
+            ref = ref,
+            commitSha = commitSha.lowercase(),
+            backupFileName = backupFileName,
+            status = DEPLOYMENT_APPLIED,
+            createdAt = System.currentTimeMillis(),
+        )
+        val values = ContentValues().apply {
+            put("id", deployment.id)
+            put("site_id", deployment.siteId)
+            put("repository", deployment.repository)
+            put("ref", deployment.ref)
+            put("commit_sha", deployment.commitSha)
+            put("backup_file", deployment.backupFileName)
+            put("status", deployment.status)
+            put("created_at", deployment.createdAt)
+        }
+        writableDatabase.insertOrThrow("deployments", null, values)
+        return deployment
+    }
+
+    fun markDeploymentRolledBack(id: String) {
+        val changed = writableDatabase.update(
+            "deployments",
+            ContentValues().apply { put("status", DEPLOYMENT_ROLLED_BACK) },
+            "id = ? AND status = ?",
+            arrayOf(id, DEPLOYMENT_APPLIED),
+        )
+        check(changed == 1) { "Deployment is no longer available to roll back." }
+    }
+
+    fun pruneDeploymentHistory(siteId: String, keepNewest: Int): List<String> {
+        require(keepNewest in 1..20)
+        val db = writableDatabase
+        val removed = mutableListOf<Pair<String, String>>()
+        db.beginTransaction()
+        try {
+            db.rawQuery(
+                "SELECT id, backup_file FROM deployments WHERE site_id = ? ORDER BY created_at DESC, rowid DESC LIMIT -1 OFFSET ?",
+                arrayOf(siteId, keepNewest.toString()),
+            ).use { cursor -> while (cursor.moveToNext()) removed += cursor.getString(0) to cursor.getString(1) }
+            removed.forEach { (id, _) -> db.delete("deployments", "id = ?", arrayOf(id)) }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+        return removed.map { it.second }
     }
 
     fun recentEvents(limit: Int = 30): List<LocalHostingEvent> {
@@ -277,6 +403,17 @@ class LocalHostingStore(context: Context) : SQLiteOpenHelper(
         )
     }
 
+    private fun android.database.Cursor.toLocalDeployment(): LocalDeployment = LocalDeployment(
+        id = getString(0),
+        siteId = getString(1),
+        repository = getString(2),
+        ref = getString(3),
+        commitSha = getString(4),
+        backupFileName = getString(5),
+        status = getString(6),
+        createdAt = getLong(7),
+    )
+
     private fun createTrafficTable(db: SQLiteDatabase) {
         db.execSQL(
             """CREATE TABLE daily_traffic (
@@ -289,13 +426,34 @@ class LocalHostingStore(context: Context) : SQLiteOpenHelper(
         db.execSQL("CREATE INDEX daily_traffic_day_idx ON daily_traffic(day)")
     }
 
+    private fun createDeploymentTable(db: SQLiteDatabase) {
+        db.execSQL(
+            """CREATE TABLE deployments (
+                id TEXT PRIMARY KEY NOT NULL,
+                site_id TEXT NOT NULL,
+                repository TEXT NOT NULL,
+                ref TEXT NOT NULL,
+                commit_sha TEXT NOT NULL,
+                backup_file TEXT NOT NULL UNIQUE,
+                status TEXT NOT NULL,
+                created_at INTEGER NOT NULL
+            )""".trimIndent(),
+        )
+        db.execSQL("CREATE INDEX deployments_site_created_idx ON deployments(site_id, created_at DESC)")
+    }
+
     companion object {
         const val STATUS_ACTIVE = "ACTIVE"
         const val STATUS_STOPPED = "STOPPED"
+        const val DEPLOYMENT_APPLIED = "APPLIED"
+        const val DEPLOYMENT_ROLLED_BACK = "ROLLED_BACK"
         private const val DATABASE_NAME = "anb-local-hosting.db"
-        private const val DATABASE_VERSION = 2
+        private const val DATABASE_VERSION = 3
         private const val PREFERENCES_NAME = "local-hosting-preferences"
         private const val PREF_LAN_SHARING = "lan-sharing-enabled"
         private const val PREF_KEEP_CPU_AWAKE = "keep-cpu-awake-while-hosting"
+        private val DEPLOYMENT_COLUMNS = arrayOf(
+            "id", "site_id", "repository", "ref", "commit_sha", "backup_file", "status", "created_at",
+        )
     }
 }

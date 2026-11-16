@@ -124,7 +124,7 @@ class LocalFileManagerTest {
     }
 
     @Test
-    fun upgradesExistingLocalCatalogToTrafficTracking() {
+    fun upgradesExistingLocalCatalogToTrafficAndDeploymentTracking() {
         store.close()
         context.deleteDatabase("anb-local-hosting.db")
         val database = SQLiteDatabase.openOrCreateDatabase(
@@ -138,6 +138,7 @@ class LocalFileManagerTest {
         store.recordTraffic("legacy-site", 1536)
 
         assertEquals(1536L, store.trafficLast30Days("legacy-site"))
+        assertTrue(store.deploymentHistory("legacy-site").isEmpty())
     }
 
     @Test

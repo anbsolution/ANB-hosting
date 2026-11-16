@@ -63,6 +63,7 @@ private data class LocalHostingSnapshot(
     val sites: List<LocalSite>,
     val events: List<LocalHostingEvent>,
     val usageBySite: Map<String, LocalSiteUsage>,
+    val deploymentsBySite: Map<String, LocalDeployment>,
     val deviceMetrics: LocalDeviceMetrics,
 )
 
@@ -87,6 +88,7 @@ internal fun LocalHostingScreen(
     var usageBySite by remember { mutableStateOf(emptyMap<String, LocalSiteUsage>()) }
     var deviceMetrics by remember { mutableStateOf(LocalDeviceMetrics(0L, 0L, null)) }
     var events by remember { mutableStateOf(emptyList<LocalHostingEvent>()) }
+    var deploymentsBySite by remember { mutableStateOf(emptyMap<String, LocalDeployment>()) }
     var allowLan by remember { mutableStateOf(store.isLanSharingEnabled()) }
     var keepCpuAwake by remember { mutableStateOf(store.isKeepCpuAwakeEnabled()) }
     var siteName by remember { mutableStateOf("") }
@@ -96,7 +98,9 @@ internal fun LocalHostingScreen(
     var githubSiteName by remember { mutableStateOf("") }
     var githubPublishDirectory by remember { mutableStateOf("") }
     var githubRef by remember { mutableStateOf("") }
+    var targetSiteId by remember { mutableStateOf<String?>(null) }
     var pendingDelete by remember { mutableStateOf<LocalSite?>(null) }
+    var pendingRollback by remember { mutableStateOf<LocalDeployment?>(null) }
     var error by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var phoneAddress by remember { mutableStateOf(LocalNetwork.wifiIpv4Address(context)?.hostAddress) }
@@ -113,12 +117,16 @@ internal fun LocalHostingScreen(
                         sites = allSites,
                         events = store.recentEvents(),
                         usageBySite = allSites.associate { it.id to fileManager.measureUsage(it) },
+                        deploymentsBySite = allSites.mapNotNull { site ->
+                            store.latestAppliedDeployment(site.id)?.let { site.id to it }
+                        }.toMap(),
                         deviceMetrics = resourceMonitor.sample(),
                     )
                 }
                 sites = result.sites
                 events = result.events
                 usageBySite = result.usageBySite
+                deploymentsBySite = result.deploymentsBySite
                 deviceMetrics = result.deviceMetrics
                 allowLan = store.isLanSharingEnabled()
                 keepCpuAwake = store.isKeepCpuAwakeEnabled()
@@ -206,17 +214,40 @@ internal fun LocalHostingScreen(
             error = ""
             try {
                 val deployedSite = withContext(Dispatchers.IO) {
-                    githubDeployer.deploy(githubRepositoryUrl, githubSiteName, githubPublishDirectory, githubRef)
+                    githubDeployer.deploy(
+                        githubRepositoryUrl,
+                        githubSiteName,
+                        githubPublishDirectory,
+                        githubRef,
+                        targetSiteId,
+                    )
                 }
                 showGithubDeployment = false
                 githubRepositoryUrl = ""
                 githubSiteName = ""
                 githubPublishDirectory = ""
                 githubRef = ""
+                targetSiteId = null
                 reload()
                 startSite(deployedSite)
             } catch (failure: Exception) {
                 error = failure.message ?: "GitHub deployment failed."
+            } finally {
+                busy = false
+            }
+        }
+    }
+
+    fun rollbackDeployment(deployment: LocalDeployment) {
+        scope.launch {
+            busy = true
+            error = ""
+            try {
+                withContext(Dispatchers.IO) { githubDeployer.rollback(deployment.id, deployment.siteId) }
+                pendingRollback = null
+                reload()
+            } catch (failure: Exception) {
+                error = failure.message ?: "Deployment rollback failed."
             } finally {
                 busy = false
             }
@@ -355,6 +386,7 @@ internal fun LocalHostingScreen(
                         }
                         OutlinedButton(
                             onClick = {
+                                targetSiteId = null
                                 githubRepositoryUrl = ""
                                 githubSiteName = ""
                                 githubPublishDirectory = ""
@@ -383,6 +415,7 @@ internal fun LocalHostingScreen(
                     }
 
                     items(sites, key = { it.id }) { site ->
+                        val deployment = deploymentsBySite[site.id]
                         Card(colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(18.dp)) {
                             Column(Modifier.fillMaxWidth().padding(16.dp)) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -432,6 +465,35 @@ internal fun LocalHostingScreen(
                                     TextButton(onClick = { pendingDelete = site }, enabled = !busy) {
                                         Text("Delete website", color = Color(0xFFB42318))
                                     }
+                                }
+                                if (site.status == LocalHostingStore.STATUS_STOPPED) {
+                                    OutlinedButton(
+                                        onClick = {
+                                            targetSiteId = site.id
+                                            githubRepositoryUrl = ""
+                                            githubSiteName = site.name
+                                            githubPublishDirectory = ""
+                                            githubRef = ""
+                                            error = ""
+                                            showGithubDeployment = true
+                                        },
+                                        enabled = !busy,
+                                    ) { Text("Deploy update from GitHub") }
+                                }
+                                deployment?.let { latest ->
+                                    Spacer(Modifier.height(8.dp))
+                                    Text(
+                                        "GitHub ${latest.ref} · ${latest.commitSha.take(8)}",
+                                        color = LocalMuted,
+                                        fontSize = 11.sp,
+                                    )
+                                    OutlinedButton(
+                                        onClick = {
+                                            error = ""
+                                            pendingRollback = latest
+                                        },
+                                        enabled = !busy && site.status == LocalHostingStore.STATUS_STOPPED,
+                                    ) { Text("Rollback latest deployment") }
                                 }
                                 if (site.status == LocalHostingStore.STATUS_ACTIVE) {
                                     Text(
@@ -502,19 +564,28 @@ internal fun LocalHostingScreen(
     }
 
     if (showGithubDeployment) {
+        val selectedTargetSite = targetSiteId?.let { id -> sites.firstOrNull { it.id == id } }
+        val targetSiteMissing = targetSiteId != null && selectedTargetSite == null
         AlertDialog(
             onDismissRequest = { if (!busy) showGithubDeployment = false },
-            title = { Text("Deploy a public GitHub site") },
+            title = { Text(if (selectedTargetSite == null) "Deploy a public GitHub site" else "Update ${selectedTargetSite.name}") },
             text = {
                 Column(
                     modifier = Modifier.heightIn(max = 440.dp).verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     Text(
-                        "Internet is needed for the download. Choose a branch, tag, or commit; blank uses the default branch. The deployment records the resolved commit SHA and publishes a prebuilt folder containing index.html. This phone does not build source code yet.",
+                        if (selectedTargetSite == null) {
+                            "Internet is needed for the download. Choose a branch, tag, or commit; blank uses the default branch. The deployment records the resolved commit SHA and publishes a prebuilt folder containing index.html. This phone does not build source code yet."
+                        } else {
+                            "This replaces ${selectedTargetSite.name}'s files after creating a rollback backup. Keep the site stopped during the update. Each backup is limited to 50 MiB; up to three snapshots are kept."
+                        },
                         color = LocalMuted,
                         fontSize = 12.sp,
                     )
+                    if (targetSiteMissing) {
+                        Text("The selected website no longer exists. Close this dialog and choose another site.", color = Color(0xFFB42318), fontSize = 12.sp)
+                    }
                     OutlinedTextField(
                         value = githubRepositoryUrl,
                         onValueChange = { if (it.length <= 300) githubRepositoryUrl = it },
@@ -531,13 +602,15 @@ internal fun LocalHostingScreen(
                         singleLine = true,
                         enabled = !busy,
                     )
-                    OutlinedTextField(
-                        value = githubSiteName,
-                        onValueChange = { if (it.length <= 80) githubSiteName = it },
-                        label = { Text("Website name") },
-                        singleLine = true,
-                        enabled = !busy,
-                    )
+                    if (selectedTargetSite == null) {
+                        OutlinedTextField(
+                            value = githubSiteName,
+                            onValueChange = { if (it.length <= 80) githubSiteName = it },
+                            label = { Text("Website name") },
+                            singleLine = true,
+                            enabled = !busy,
+                        )
+                    }
                     OutlinedTextField(
                         value = githubPublishDirectory,
                         onValueChange = { if (it.length <= 200) githubPublishDirectory = it },
@@ -553,11 +626,38 @@ internal fun LocalHostingScreen(
             confirmButton = {
                 TextButton(
                     onClick = { deployGithubSite() },
-                    enabled = !busy && githubRepositoryUrl.isNotBlank() && githubSiteName.trim().length in 2..80,
+                    enabled = !busy && !targetSiteMissing && githubRepositoryUrl.isNotBlank() &&
+                        (selectedTargetSite != null || githubSiteName.trim().length in 2..80),
                 ) { Text(if (busy) "Deploying…" else "Download and deploy") }
             },
             dismissButton = {
                 TextButton(onClick = { showGithubDeployment = false }, enabled = !busy) { Text("Cancel") }
+            },
+        )
+    }
+
+    pendingRollback?.let { deployment ->
+        val siteName = sites.firstOrNull { it.id == deployment.siteId }?.name ?: "this website"
+        AlertDialog(
+            onDismissRequest = { if (!busy) pendingRollback = null },
+            title = { Text("Roll back deployment?") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "Restore the saved files from before ${deployment.repository} · ${deployment.ref} · ${deployment.commitSha.take(8)} was deployed to $siteName? The website must stay stopped.",
+                        color = LocalMuted,
+                        fontSize = 13.sp,
+                    )
+                    if (error.isNotBlank()) Text(error, color = Color(0xFFB42318), fontSize = 12.sp)
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { rollbackDeployment(deployment) }, enabled = !busy) {
+                    Text(if (busy) "Restoring…" else "Restore previous files")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingRollback = null }, enabled = !busy) { Text("Cancel") }
             },
         )
     }
