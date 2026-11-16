@@ -17,7 +17,7 @@ This audit describes the local `main` worktree as of 2026-11-16. The GitHub `mai
 - Configurable Android partial CPU wake lock while active sites run, with an in-app battery setting and a shortcut to Android app battery settings.
 - Android local website management source: SAF file import/export, delete/rename, small text-file editing, ZIP extraction, and ZIP backup/restore.
 - Android local request/error events, per-site file/storage totals, 30-day successful response payload totals, app memory/CPU samples, and free-storage samples.
-- Android public GitHub repository deployment source: read public repository metadata, download the default-branch ZIP archive, publish a prebuilt folder containing `index.html`, atomically replace a stopped site's files, and record local deployment events. ZIP and path limits are enforced; no build is run.
+- Android public GitHub repository deployment source: select a branch, tag, or commit (or use the default), resolve it to a commit SHA, download that pinned archive, publish a prebuilt folder containing `index.html`, and record local deployment events. ZIP and path limits are enforced; no build is run.
 - GitHub Actions source for JavaScript workspace validation and an Android debug unit-test/APK build. The Android job runs `:app:testDebugUnitTest` before `:app:assembleDebug`.
 - A Docker-based static-site engine and NGINX routing for a separate Linux host. The Docker site container has fixed CPU, memory, PID, capability, filesystem, and log limits.
 - A script for private-CA HTTPS on the Linux-hosted LAN stack. Android trusts installed user CA certificates for API connections.
@@ -30,7 +30,7 @@ This audit describes the local `main` worktree as of 2026-11-16. The GitHub `mai
 - **Domains and SSL:** the Prisma `Domain` model and Linux local-CA setup exist. There is no domain API/UI, DNS ownership verification, registrar/provider integration, public certificate issuance, or automatic renewal.
 - **Database support:** PostgreSQL stores ANB control-plane data. It is not a customer database feature and there is no MySQL-compatible server, per-site database/user management, import/export, or backup workflow.
 - **Monitoring and limits:** Android now has local app/storage measurements and site request totals. It does not enforce per-site CPU/RAM/storage quotas. The Docker engine has container limits, but dashboard storage/bandwidth metrics are not wired to measured production data.
-- **GitHub deployment:** public prebuilt static-folder deployment is implemented in source. Private-repository authorization, source builds, selected branches/commits, rollback, and cloud deployment history remain missing.
+- **GitHub deployment:** public prebuilt static-folder deployment with branch/tag selection and commit-SHA pinning is implemented in source. Private-repository authorization, source builds, rollback, and cloud deployment history remain missing.
 - **Dashboard parity:** the web dashboard and Android app provide the existing account/website workflows. Android does not yet have complete domains, databases, email, deployment, or hosting-plan modules; the UI is not yet a finished premium hosting console.
 - **APK updates:** the application ID is stable, but CI currently creates debug APKs and the repository has no stable release/upload key. Package ID alone does not make separately signed APKs update-compatible.
 
@@ -38,7 +38,7 @@ This audit describes the local `main` worktree as of 2026-11-16. The GitHub `mai
 
 - Packaged, on-device PHP, Node.js, and Python runtimes, runtime version selection, per-site process controls, and useful build/runtime logs.
 - A real MySQL-compatible customer database service inside Android, with isolated databases/users, credentials, import/export, and backup/restore.
-- Private GitHub repository authorization, on-device build steps, commit-pinned deployments, deployment rollback, and cloud deployment history.
+- Private GitHub repository authorization, on-device build steps, deployment rollback, and cloud deployment history.
 - Custom-domain/subdomain management, DNS configuration and verification, public Let's Encrypt issuance, and renewal.
 - Optional synchronization to a self-hosted ANB endpoint, with conflict handling and user-controlled data scope.
 - Functional Android modules for domains, databases, and email services, and complete web/mobile feature parity.
@@ -46,7 +46,7 @@ This audit describes the local `main` worktree as of 2026-11-16. The GitHub `mai
 
 ## Not yet tested
 
-- Android unit tests added for static serving, path safety, file/archive operations, database migration, resource measurement, public-repository URL validation, static archive deployment/failure cleanup, folder selection, dotfile protection, and the screen-off preference have not run in GitHub Actions for the local commits.
+- Android unit tests added for static serving, path safety, file/archive operations, database migration, resource measurement, public-repository URL/ref validation, branch-to-SHA resolution, pinned archive deployment/failure cleanup, folder selection, dotfile protection, and the screen-off preference have not run in GitHub Actions for the local commits.
 - The wake-lock acquire/release lifecycle has not been exercised on a physical Android device.
 - No APK has been built from the local commits after `e074683`, installed, or tested on an Android device. The available shells have no JDK or Gradle. The requirement to build Android APKs through GitHub Actions remains in force.
 - The latest observed GitHub Actions run was run 5 for remote commit `e074683`; it succeeded. That verifies the old remote revision, not any commits currently ahead of `origin/main`.
@@ -105,7 +105,7 @@ The existing web/cloud path remains separate: web or Android client → LAN NGIN
 
 ### Phase 5 — GitHub deployment and build history
 
-- Extend the implemented public prebuilt-static deployment with commit pinning and branch selection.
+- Add deployment rollback and build/deploy history to the implemented public prebuilt-static deployment.
 - Add private repositories only with a proper OAuth/app authorization flow.
 - Build using supported on-device runtimes, stage releases atomically, and keep detailed build/deploy logs and rollback history.
 - Do not store personal access tokens in logs or plain-text preferences.

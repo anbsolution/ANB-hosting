@@ -1,6 +1,7 @@
 package com.anbhosting.app
 
 import android.content.Context
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
@@ -47,9 +48,37 @@ internal data class PublicGithubRepositoryMetadata(
     val defaultBranch: String,
 )
 
+internal object GithubDeploymentRef {
+    fun validateSelected(value: String): String {
+        val ref = value.trim()
+        if (ref.isEmpty()) return ""
+        require(ref.length <= 255) { "Branch, tag, or commit must be 255 characters or fewer." }
+        require(ref != "@" && !ref.startsWith('-') && !ref.startsWith('/') && !ref.endsWith('/')) {
+            "Enter a valid Git branch, tag, or commit."
+        }
+        require(!ref.contains("..") && !ref.contains("//") && !ref.contains("@{")) {
+            "Enter a valid Git branch, tag, or commit."
+        }
+        require(ref.none { it.isWhitespace() || Character.isISOControl(it) || it in "~^:?*[\\" }) {
+            "Branch or tag contains unsupported characters."
+        }
+        require(ref.split('/').none { it.startsWith('.') || it.endsWith('.') || it.endsWith(".lock") }) {
+            "Enter a valid Git branch, tag, or commit."
+        }
+        return ref
+    }
+
+    fun resolveSelectedOrDefault(selected: String, defaultBranch: String): String {
+        val ref = if (selected.isBlank()) defaultBranch else selected
+        require(ref.isNotBlank()) { "GitHub did not report a default branch." }
+        return validateSelected(ref)
+    }
+}
+
 internal interface PublicGithubClient {
     fun repository(repository: PublicGithubRepository): PublicGithubRepositoryMetadata
-    fun downloadDefaultBranch(repository: PublicGithubRepository, destination: File)
+    fun resolveCommit(repository: PublicGithubRepository, ref: String): String
+    fun downloadCommit(repository: PublicGithubRepository, commitSha: String, destination: File)
 }
 
 /** Read-only GitHub REST client. It deploys public archives without storing GitHub credentials. */
@@ -62,7 +91,7 @@ internal class GithubRestClient(
         .build(),
 ) : PublicGithubClient {
     override fun repository(repository: PublicGithubRepository): PublicGithubRepositoryMetadata {
-        val request = githubRequest("https://api.github.com/repos/${repository.owner}/${repository.name}")
+        val request = githubRequest(githubApiUrl("repos", repository.owner, repository.name))
         http.newCall(request).execute().use { response ->
             if (response.code == 404) throw IOException("Public repository not found; private repositories are not supported yet.")
             if (!response.isSuccessful) throw IOException(githubStatusMessage(response.code))
@@ -77,8 +106,30 @@ internal class GithubRestClient(
         }
     }
 
-    override fun downloadDefaultBranch(repository: PublicGithubRepository, destination: File) {
-        val request = githubRequest("https://api.github.com/repos/${repository.owner}/${repository.name}/zipball")
+    override fun resolveCommit(repository: PublicGithubRepository, ref: String): String {
+        val request = githubRequest(githubApiUrl("repos", repository.owner, repository.name, "commits", ref))
+        http.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) {
+                if (response.code == 404) throw IOException("The requested public branch, tag, or commit was not found.")
+                throw IOException(githubStatusMessage(response.code))
+            }
+            val body = response.body?.string() ?: throw IOException("GitHub returned an empty commit response.")
+            val json = runCatching { JSONObject(body) }.getOrElse {
+                throw IOException("GitHub returned invalid commit metadata.")
+            }
+            val sha = json.optString("sha")
+            if (!sha.matches(Regex("[a-fA-F0-9]{40}"))) {
+                throw IOException("GitHub did not return a valid commit SHA.")
+            }
+            return sha.lowercase()
+        }
+    }
+
+    override fun downloadCommit(repository: PublicGithubRepository, commitSha: String, destination: File) {
+        require(commitSha.matches(Regex("[a-fA-F0-9]{40}"))) { "GitHub returned an invalid commit SHA." }
+        val request = githubRequest(
+            githubApiUrl("repos", repository.owner, repository.name, "zipball", commitSha.lowercase()),
+        )
         http.newCall(request).execute().use { response ->
             if (!response.isSuccessful) throw IOException(githubStatusMessage(response.code))
             val host = response.request.url.host.lowercase()
@@ -116,9 +167,15 @@ internal class GithubRestClient(
         .get()
         .build()
 
+    private fun githubApiUrl(vararg segments: String): String {
+        val builder = "https://api.github.com".toHttpUrl().newBuilder()
+        segments.forEach { builder.addPathSegment(it) }
+        return builder.build().toString()
+    }
+
     private fun githubStatusMessage(code: Int): String = when (code) {
         403, 429 -> "GitHub rate-limited or denied this public repository request. Try again later."
-        404 -> "Public repository archive not found. The default branch may be empty."
+        404 -> "GitHub could not provide the archive for the resolved commit."
         else -> "GitHub request failed (HTTP $code)."
     }
 
@@ -136,10 +193,16 @@ internal class LocalGithubDeployer(
     private val files: LocalFileManager,
     private val github: PublicGithubClient = GithubRestClient(),
 ) {
-    fun deploy(repositoryUrl: String, websiteName: String, publishDirectory: String = ""): LocalSite {
+    fun deploy(
+        repositoryUrl: String,
+        websiteName: String,
+        publishDirectory: String = "",
+        selectedRef: String = "",
+    ): LocalSite {
         val repository = PublicGithubRepository.parse(repositoryUrl)
         val name = websiteName.trim()
         require(name.length in 2..80) { "Website name must be 2 to 80 characters." }
+        val requestedRef = GithubDeploymentRef.validateSelected(selectedRef)
         store.recordEvent(null, "deployment.started", "GitHub ${repository.fullName}")
 
         cleanupStaleArchives()
@@ -149,9 +212,11 @@ internal class LocalGithubDeployer(
         try {
             val metadata = github.repository(repository)
             require(!metadata.isPrivate) { "Private GitHub repositories are not supported yet." }
-            require(metadata.defaultBranch.isNotBlank()) { "GitHub did not report a default branch." }
+            val ref = GithubDeploymentRef.resolveSelectedOrDefault(requestedRef, metadata.defaultBranch)
+            val commitSha = github.resolveCommit(repository, ref)
+            store.recordEvent(null, "deployment.commit_resolved", "GitHub ${repository.fullName} · $ref · $commitSha")
 
-            github.downloadDefaultBranch(repository, archive)
+            github.downloadCommit(repository, commitSha, archive)
             store.recordEvent(null, "deployment.archive_downloaded", "GitHub ${repository.fullName} · ${archive.length()} bytes")
 
             site = store.createSite(name)
@@ -160,7 +225,7 @@ internal class LocalGithubDeployer(
             store.recordEvent(
                 site.id,
                 "deployment.succeeded",
-                "GitHub ${repository.fullName} · ${metadata.defaultBranch} · ${publishDirectory.ifBlank { "/" }}",
+                "GitHub ${repository.fullName} · $ref · $commitSha · ${publishDirectory.ifBlank { "/" }}",
             )
             return site
         } catch (failure: Exception) {
@@ -169,7 +234,7 @@ internal class LocalGithubDeployer(
                 store.recordEvent(
                     site?.id,
                     "deployment.failed",
-                    "GitHub ${repository.fullName} · ${(failure.message ?: "Deployment failed").take(300)}",
+                    "GitHub ${repository.fullName} · ${requestedRef.ifBlank { "default branch" }} · ${(failure.message ?: "Deployment failed").take(300)}",
                 )
             }
             throw failure

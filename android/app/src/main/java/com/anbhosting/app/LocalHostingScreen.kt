@@ -5,12 +5,15 @@ import android.net.Uri
 import android.provider.Settings
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -92,6 +95,7 @@ internal fun LocalHostingScreen(
     var githubRepositoryUrl by remember { mutableStateOf("") }
     var githubSiteName by remember { mutableStateOf("") }
     var githubPublishDirectory by remember { mutableStateOf("") }
+    var githubRef by remember { mutableStateOf("") }
     var pendingDelete by remember { mutableStateOf<LocalSite?>(null) }
     var error by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
@@ -202,12 +206,13 @@ internal fun LocalHostingScreen(
             error = ""
             try {
                 val deployedSite = withContext(Dispatchers.IO) {
-                    githubDeployer.deploy(githubRepositoryUrl, githubSiteName, githubPublishDirectory)
+                    githubDeployer.deploy(githubRepositoryUrl, githubSiteName, githubPublishDirectory, githubRef)
                 }
                 showGithubDeployment = false
                 githubRepositoryUrl = ""
                 githubSiteName = ""
                 githubPublishDirectory = ""
+                githubRef = ""
                 reload()
                 startSite(deployedSite)
             } catch (failure: Exception) {
@@ -353,6 +358,7 @@ internal fun LocalHostingScreen(
                                 githubRepositoryUrl = ""
                                 githubSiteName = ""
                                 githubPublishDirectory = ""
+                                githubRef = ""
                                 error = ""
                                 showGithubDeployment = true
                             },
@@ -500,9 +506,12 @@ internal fun LocalHostingScreen(
             onDismissRequest = { if (!busy) showGithubDeployment = false },
             title = { Text("Deploy a public GitHub site") },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Column(
+                    modifier = Modifier.heightIn(max = 440.dp).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
                     Text(
-                        "Internet is needed for the download. This imports the public repository's default branch and publishes a prebuilt folder containing index.html; this phone does not build source code yet.",
+                        "Internet is needed for the download. Choose a branch, tag, or commit; blank uses the default branch. The deployment records the resolved commit SHA and publishes a prebuilt folder containing index.html. This phone does not build source code yet.",
                         color = LocalMuted,
                         fontSize = 12.sp,
                     )
@@ -511,6 +520,14 @@ internal fun LocalHostingScreen(
                         onValueChange = { if (it.length <= 300) githubRepositoryUrl = it },
                         label = { Text("Public GitHub repository URL") },
                         placeholder = { Text("https://github.com/owner/repository") },
+                        singleLine = true,
+                        enabled = !busy,
+                    )
+                    OutlinedTextField(
+                        value = githubRef,
+                        onValueChange = { if (it.length <= 255) githubRef = it },
+                        label = { Text("Branch, tag or commit (optional)") },
+                        placeholder = { Text("main or commit SHA") },
                         singleLine = true,
                         enabled = !busy,
                     )

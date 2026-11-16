@@ -69,9 +69,45 @@ class GithubPublicDeploymentTest {
         assertEquals("body { margin: 0; }", site.root.resolve("assets/app.css").readText())
         assertFalse(site.root.resolve("README.md").exists())
         assertTrue(client.repositoryRequested)
+        assertEquals("main", client.resolvedRef)
         assertTrue(client.archiveRequested)
+        assertEquals(client.commitSha, client.downloadedCommitSha)
         assertTrue(store.recentEvents(30).any { it.action == "deployment.started" && it.detail == "GitHub example/demo" })
-        assertTrue(store.recentEvents(30).any { it.action == "deployment.succeeded" && it.detail.contains("main") })
+        assertTrue(store.recentEvents(30).any { it.action == "deployment.succeeded" && it.detail.contains("main") && it.detail.contains(client.commitSha) })
+    }
+
+    @Test
+    fun resolvesSelectedBranchToCommitAndDownloadsPinnedArchive() {
+        val client = FakeGithubClient(
+            metadata = PublicGithubRepositoryMetadata(isPrivate = false, defaultBranch = "main"),
+            archive = zipOf("demo-123/dist/index.html" to "<h1>Feature branch</h1>"),
+        )
+        val deployer = LocalGithubDeployer(context, store, LocalFileManager(store), client)
+
+        val site = deployer.deploy("https://github.com/example/demo", "Feature site", "dist", "feature/docs")
+
+        assertEquals("feature/docs", client.resolvedRef)
+        assertEquals(client.commitSha, client.downloadedCommitSha)
+        assertEquals("<h1>Feature branch</h1>", site.root.resolve("index.html").readText())
+        assertTrue(store.recentEvents(30).any {
+            it.action == "deployment.succeeded" && it.detail.contains("feature/docs") && it.detail.contains(client.commitSha)
+        })
+    }
+
+    @Test
+    fun rejectsUnsafeSelectedRefBeforeCallingGithub() {
+        val client = FakeGithubClient(
+            metadata = PublicGithubRepositoryMetadata(isPrivate = false, defaultBranch = "main"),
+            archive = byteArrayOf(),
+        )
+        val deployer = LocalGithubDeployer(context, store, LocalFileManager(store), client)
+
+        assertThrows(IllegalArgumentException::class.java) {
+            deployer.deploy("https://github.com/example/demo", "Unsafe ref", selectedRef = "../main")
+        }
+
+        assertFalse(client.repositoryRequested)
+        assertTrue(store.listSites().isEmpty())
     }
 
     @Test
@@ -123,16 +159,25 @@ class GithubPublicDeploymentTest {
         private val metadata: PublicGithubRepositoryMetadata,
         private val archive: ByteArray,
     ) : PublicGithubClient {
+        val commitSha = "a".repeat(40)
         var repositoryRequested = false
+        var resolvedRef: String? = null
         var archiveRequested = false
+        var downloadedCommitSha: String? = null
 
         override fun repository(repository: PublicGithubRepository): PublicGithubRepositoryMetadata {
             repositoryRequested = true
             return metadata
         }
 
-        override fun downloadDefaultBranch(repository: PublicGithubRepository, destination: File) {
+        override fun resolveCommit(repository: PublicGithubRepository, ref: String): String {
+            resolvedRef = ref
+            return commitSha
+        }
+
+        override fun downloadCommit(repository: PublicGithubRepository, commitSha: String, destination: File) {
             archiveRequested = true
+            downloadedCommitSha = commitSha
             destination.writeBytes(archive)
         }
     }
