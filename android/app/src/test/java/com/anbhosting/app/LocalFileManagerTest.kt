@@ -95,6 +95,33 @@ class LocalFileManagerTest {
     }
 
     @Test
+    fun installsOnlyTheSelectedPrebuiltGithubFolder() {
+        val archive = zipOf(
+            "sample-project-abc123/dist/index.html" to "<h1>Published</h1>",
+            "sample-project-abc123/dist/assets/site.css" to "body { color: navy; }",
+            "sample-project-abc123/README.md" to "Repository documentation",
+        )
+
+        files.installGithubArchive(site.id, ByteArrayInputStream(archive), "dist")
+
+        assertEquals("<h1>Published</h1>", site.root.resolve("index.html").readText())
+        assertEquals("body { color: navy; }", site.root.resolve("assets/site.css").readText())
+        assertFalse(site.root.resolve("README.md").exists())
+    }
+
+    @Test
+    fun githubArchiveWithoutStaticEntryKeepsExistingFiles() {
+        val originalIndex = site.root.resolve("index.html").readText()
+        val archive = zipOf("sample-project-abc123/README.md" to "No static site here")
+
+        assertThrows(IllegalArgumentException::class.java) {
+            files.installGithubArchive(site.id, ByteArrayInputStream(archive))
+        }
+
+        assertEquals(originalIndex, site.root.resolve("index.html").readText())
+    }
+
+    @Test
     fun upgradesExistingLocalCatalogToTrafficTracking() {
         store.close()
         context.deleteDatabase("anb-local-hosting.db")
@@ -109,5 +136,17 @@ class LocalFileManagerTest {
         store.recordTraffic("legacy-site", 1536)
 
         assertEquals(1536L, store.trafficLast30Days("legacy-site"))
+    }
+
+    private fun zipOf(vararg entries: Pair<String, String>): ByteArray {
+        val archive = ByteArrayOutputStream()
+        ZipOutputStream(archive).use { zip ->
+            entries.forEach { (path, contents) ->
+                zip.putNextEntry(ZipEntry(path))
+                zip.write(contents.toByteArray(Charsets.UTF_8))
+                zip.closeEntry()
+            }
+        }
+        return archive.toByteArray()
     }
 }

@@ -67,6 +67,23 @@ class LocalStaticServerTest {
     }
 
     @Test
+    fun doesNotExposeDotfilesButAllowsWellKnownFiles() {
+        val site = store.createSite("Offline demo")
+        site.root.resolve(".env").writeText("SECRET=value")
+        site.root.resolve(".well-known").mkdirs()
+        site.root.resolve(".well-known/assetlinks.json").writeText("[]")
+        store.setSiteStatus(site.id, LocalHostingStore.STATUS_ACTIVE)
+        server = LocalStaticServer(context, store).also { it.start(allowLan = false) }
+
+        val secretResponse = request("/s/${site.slug}/.env")
+        val wellKnownResponse = request("/s/${site.slug}/.well-known/assetlinks.json")
+
+        assertTrue(secretResponse.startsWith("HTTP/1.1 403 Forbidden"))
+        assertTrue(wellKnownResponse.startsWith("HTTP/1.1 200 OK"))
+        assertTrue(wellKnownResponse.endsWith("[]"))
+    }
+
+    @Test
     fun doesNotServeStoppedSites() {
         val site = store.createSite("Offline demo")
         server = LocalStaticServer(context, store).also { it.start(allowLan = false) }

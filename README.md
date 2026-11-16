@@ -2,6 +2,8 @@
 
 Phase 1 and the initial Phase 2 website-hosting slice for a multi-tenant web-hosting control panel, configured for offline runtime on a trusted local network. The repository is an npm-workspaces monorepo with a Next.js dashboard, a NestJS REST API, a Prisma/PostgreSQL data layer, and a restricted hosting-engine service. File management, PHP/runtime selection, registrar integrations, public SSL issuance, and production VPS deployment are not enabled yet.
 
+The native Android app also has a separate offline mode for static sites, local files, and prebuilt public GitHub repositories. Those phone-local features do not change the Docker-hosted web platform's capabilities. See [README-ANDROID.md](./README-ANDROID.md) and [DEVELOPMENT-ROADMAP.md](./DEVELOPMENT-ROADMAP.md).
+
 ## Repository layout
 
 ```text
@@ -57,7 +59,7 @@ docker-compose.yml     Local PostgreSQL + API + dashboard + engine + NGINX
 
 The first dependency/image download and `docker compose up --build` need internet. Once built, start the stack without rebuilding using `docker compose up`; runtime services can operate without internet. Keep the host computer on the Wi-Fi network; its LAN IP should be stable or DHCP-reserved. The local `.test` hostnames do not change DNS; use the path-based preview links. LAN HTTPS uses the installed private CA; public custom hostnames and publicly trusted certificates still require internet and a real DNS/ACME integration.
 
-The dashboard is a PWA; it caches the static app shell and build assets without caching API responses, credentials, or account data. It requires the trusted local HTTPS certificate above for installation and service-worker support. The cached shell can open without internet, but account actions still require the local host and Wi-Fi connection. No Android APK is built.
+The dashboard is a PWA; it caches the static app shell and build assets without caching API responses, credentials, or account data. It requires the trusted local HTTPS certificate above for installation and service-worker support. The cached shell can open without internet, but account actions still require the local host and Wi-Fi connection. GitHub Actions builds a debug Android APK; release signing is not configured.
 
 Website provisioning requires the complete Compose stack because it depends on the isolated hosting engine and NGINX. The stack is deliberately not exposed through a Codespaces port forward or public VPS in this local-only configuration.
 
@@ -86,7 +88,7 @@ Website provisioning requires the complete Compose stack because it depends on t
 - The engine API has no published port. The Docker socket is mounted only into the private hosting-engine container, never into the dashboard/API/NGINX. A Docker socket grants host-level control if the engine is compromised: use only on a trusted isolated development/hosting node; production should use a dedicated rootless runtime or separately isolated host and reviewed access policy.
 - NGINX binds only to `LAN_SERVER_IP` and accepts loopback plus the configured `LAN_ALLOWED_CIDR`; this filters by source IP subnet, not Wi-Fi SSID, so wired devices on that subnet can also connect. The control-plane and website networks are internal; only NGINX is attached to the LAN ingress bridge for host port publishing. Do not forward ports 8080 or 8443 from the router.
 - Dashboard counts come from PostgreSQL. Storage and bandwidth are shown as not yet measured instead of fabricated metrics.
-- Registrar/DNS changes, SSL issuance, file/database operations, backups, and GitHub deployments still require later phases and real provider integrations.
+- For the Docker-hosted web platform, registrar/DNS changes, public SSL, customer file/database operations, backups, and GitHub deployments still require later phases and real provider integrations. Android local mode has its own on-device static file and backup tools.
 
 ## Configuration
 

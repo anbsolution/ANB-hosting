@@ -20,6 +20,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -72,6 +73,9 @@ internal fun LocalHostingScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val fileManager = remember(store) { LocalFileManager(store) }
+    val githubDeployer = remember(context.applicationContext, store, fileManager) {
+        LocalGithubDeployer(context.applicationContext, store, fileManager)
+    }
     val resourceMonitor = remember(context) { LocalResourceMonitor(context) }
     var sites by remember { mutableStateOf(emptyList<LocalSite>()) }
     var usageBySite by remember { mutableStateOf(emptyMap<String, LocalSiteUsage>()) }
@@ -80,6 +84,10 @@ internal fun LocalHostingScreen(
     var allowLan by remember { mutableStateOf(store.isLanSharingEnabled()) }
     var siteName by remember { mutableStateOf("") }
     var showCreate by remember { mutableStateOf(false) }
+    var showGithubDeployment by remember { mutableStateOf(false) }
+    var githubRepositoryUrl by remember { mutableStateOf("") }
+    var githubSiteName by remember { mutableStateOf("") }
+    var githubPublishDirectory by remember { mutableStateOf("") }
     var pendingDelete by remember { mutableStateOf<LocalSite?>(null) }
     var error by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
@@ -183,6 +191,28 @@ internal fun LocalHostingScreen(
         }
     }
 
+    fun deployGithubSite() {
+        scope.launch {
+            busy = true
+            error = ""
+            try {
+                val deployedSite = withContext(Dispatchers.IO) {
+                    githubDeployer.deploy(githubRepositoryUrl, githubSiteName, githubPublishDirectory)
+                }
+                showGithubDeployment = false
+                githubRepositoryUrl = ""
+                githubSiteName = ""
+                githubPublishDirectory = ""
+                reload()
+                startSite(deployedSite)
+            } catch (failure: Exception) {
+                error = failure.message ?: "GitHub deployment failed."
+            } finally {
+                busy = false
+            }
+        }
+    }
+
     MaterialTheme(colorScheme = androidx.compose.material3.lightColorScheme(primary = LocalBlue)) {
         Surface(Modifier.fillMaxSize(), color = Color(0xFFF4F6FB)) {
             val selectedSite = managedSite
@@ -198,7 +228,7 @@ internal fun LocalHostingScreen(
                         TextButton(onClick = onBack) { Text("‹ Back", color = Color.White) }
                         Spacer(Modifier.weight(1f))
                         TextButton(onClick = { reload() }) { Text("Refresh", color = Color.White) }
-                        Text("OFFLINE MODE", color = Color(0xFFB9C7E7), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        Text("LOCAL MODE", color = Color(0xFFB9C7E7), fontSize = 11.sp, fontWeight = FontWeight.Bold)
                     }
                     Text("Host on this phone", color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold)
                     Text("Sites and settings are stored on this device.", color = Color(0xFFB9C7E7), fontSize = 13.sp)
@@ -269,6 +299,17 @@ internal fun LocalHostingScreen(
                             }
                             Button(onClick = { siteName = ""; showCreate = true }) { Text("New site") }
                         }
+                        OutlinedButton(
+                            onClick = {
+                                githubRepositoryUrl = ""
+                                githubSiteName = ""
+                                githubPublishDirectory = ""
+                                error = ""
+                                showGithubDeployment = true
+                            },
+                            enabled = !busy,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) { Text("Deploy public GitHub site") }
                     }
 
                     if (error.isNotBlank()) item {
@@ -402,6 +443,56 @@ internal fun LocalHostingScreen(
                 ) { Text("Create") }
             },
             dismissButton = { TextButton(onClick = { showCreate = false }) { Text("Cancel") } },
+        )
+    }
+
+    if (showGithubDeployment) {
+        AlertDialog(
+            onDismissRequest = { if (!busy) showGithubDeployment = false },
+            title = { Text("Deploy a public GitHub site") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        "Internet is needed for the download. This imports the public repository's default branch and publishes a prebuilt folder containing index.html; this phone does not build source code yet.",
+                        color = LocalMuted,
+                        fontSize = 12.sp,
+                    )
+                    OutlinedTextField(
+                        value = githubRepositoryUrl,
+                        onValueChange = { if (it.length <= 300) githubRepositoryUrl = it },
+                        label = { Text("Public GitHub repository URL") },
+                        placeholder = { Text("https://github.com/owner/repository") },
+                        singleLine = true,
+                        enabled = !busy,
+                    )
+                    OutlinedTextField(
+                        value = githubSiteName,
+                        onValueChange = { if (it.length <= 80) githubSiteName = it },
+                        label = { Text("Website name") },
+                        singleLine = true,
+                        enabled = !busy,
+                    )
+                    OutlinedTextField(
+                        value = githubPublishDirectory,
+                        onValueChange = { if (it.length <= 200) githubPublishDirectory = it },
+                        label = { Text("Prebuilt folder (optional)") },
+                        placeholder = { Text("dist or docs") },
+                        singleLine = true,
+                        enabled = !busy,
+                    )
+                    if (busy) CircularProgressIndicator(Modifier.size(22.dp))
+                    if (error.isNotBlank()) Text(error, color = Color(0xFFB42318), fontSize = 12.sp)
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = { deployGithubSite() },
+                    enabled = !busy && githubRepositoryUrl.isNotBlank() && githubSiteName.trim().length in 2..80,
+                ) { Text(if (busy) "Deploying…" else "Download and deploy") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showGithubDeployment = false }, enabled = !busy) { Text("Cancel") }
+            },
         )
     }
 

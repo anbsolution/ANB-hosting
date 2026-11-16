@@ -226,6 +226,61 @@ class LocalFileManager(private val store: LocalHostingStore) {
         store.recordEvent(siteId, "website.restored", "Backup restored")
     }
 
+    /** Atomically installs a prebuilt static folder from a GitHub ZIP archive into a stopped site. */
+    fun installGithubArchive(siteId: String, source: InputStream, publishDirectory: String = "") {
+        val site = store.listSites().firstOrNull { it.id == siteId }
+            ?: throw IllegalArgumentException("Website no longer exists.")
+        check(site.status == LocalHostingStore.STATUS_STOPPED) {
+            "Stop the website before replacing its files."
+        }
+
+        val root = site.root.canonicalFile
+        val parent = root.parentFile ?: throw IOException("Website storage is invalid.")
+        val extracted = File(parent, ".anb-tmp-github-${UUID.randomUUID()}")
+        val prepared = File(parent, ".anb-tmp-publish-${UUID.randomUUID()}")
+        val displaced = File(parent, ".anb-restore-old-${UUID.randomUUID()}")
+        try {
+            check(extracted.mkdir()) { "Temporary deployment storage could not be created." }
+            source.use { extractZipContents(it, extracted) }
+
+            val archiveEntries = extracted.listFiles() ?: throw IOException("GitHub archive could not be read.")
+            require(archiveEntries.isNotEmpty()) { "GitHub repository archive is empty." }
+            val repositoryRoot = if (archiveEntries.size == 1 && archiveEntries[0].isDirectory) {
+                archiveEntries[0]
+            } else {
+                extracted
+            }
+            val requestedDirectory = normalizePublishDirectory(publishDirectory)
+            val selectedDirectory = resolve(repositoryRoot, requestedDirectory)
+            require(selectedDirectory.isDirectory) { "The selected publish folder does not exist in the repository." }
+            require(File(selectedDirectory, "index.html").isFile) {
+                "The selected publish folder must contain a prebuilt index.html file. Builds are not run during this deployment."
+            }
+
+            copyDirectoryContents(selectedDirectory, prepared)
+            check(File(prepared, "index.html").isFile) { "The static website could not be staged." }
+            if (!root.renameTo(displaced)) throw IOException("Current website files could not be staged for deployment.")
+            if (!prepared.renameTo(root)) {
+                if (!displaced.renameTo(root)) {
+                    throw IOException("Deployment failed; previous files remain in ${displaced.name}.")
+                }
+                throw IOException("The GitHub website files could not be published; previous files were restored.")
+            }
+            if (!displaced.deleteRecursively()) {
+                store.recordEvent(siteId, "deployment.cleanup_needed", displaced.name)
+            }
+        } finally {
+            extracted.deleteRecursively()
+            prepared.deleteRecursively()
+            if (!root.exists() && displaced.exists()) displaced.renameTo(root)
+        }
+        store.recordEvent(
+            siteId,
+            "deployment.files_installed",
+            normalizePublishDirectory(publishDirectory).ifBlank { "/" },
+        )
+    }
+
     private fun extractZipContents(source: InputStream, staging: File) {
         val seen = mutableSetOf<String>()
         var entries = 0
@@ -308,6 +363,45 @@ class LocalFileManager(private val store: LocalHostingStore) {
             "ZIP archive contains an unsafe path."
         }
         return parts.joinToString("/")
+    }
+
+    private fun normalizePublishDirectory(value: String): String {
+        val path = value.trim()
+        require(!path.startsWith('/') && !path.contains('\\') && !path.contains('\u0000')) {
+            "Publish folder must be a relative website path."
+        }
+        val normalized = path.trimEnd('/')
+        return if (normalized.isEmpty() || normalized == ".") "" else normalized
+    }
+
+    private fun copyDirectoryContents(source: File, destination: File) {
+        check(destination.mkdir()) { "Website files could not be staged." }
+        var copiedBytes = 0L
+        source.walkTopDown().forEach { sourceFile ->
+            checkInside(source, sourceFile.canonicalFile)
+            if (Files.isSymbolicLink(sourceFile.toPath())) {
+                throw IOException("Symbolic links are not allowed in a GitHub deployment archive.")
+            }
+            if (sourceFile == source) return@forEach
+
+            val relativePath = relative(source, sourceFile)
+            val destinationFile = File(destination, relativePath).canonicalFile
+            checkInside(destination.canonicalFile, destinationFile)
+            if (sourceFile.isDirectory) {
+                check(destinationFile.isDirectory || destinationFile.mkdirs()) {
+                    "A deployment folder could not be created."
+                }
+            } else {
+                check(sourceFile.isFile && destinationFile.parentFile?.isDirectory == true) {
+                    "The GitHub archive contains an unsupported file."
+                }
+                sourceFile.inputStream().use { input ->
+                    destinationFile.outputStream().use { output ->
+                        copiedBytes += copyBounded(input, output, MAX_ARCHIVE_BYTES - copiedBytes)
+                    }
+                }
+            }
+        }
     }
 
     private fun validateLeafName(name: String) {

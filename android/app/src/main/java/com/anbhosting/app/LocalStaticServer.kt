@@ -226,6 +226,7 @@ class LocalStaticServer(private val context: Context, private val store: LocalHo
         if (relativeParts.any { it == "." || it == ".." || it.contains('\\') || it.contains('\u0000') }) {
             return ForbiddenPath
         }
+        if (relativeParts.any { it.startsWith('.') && it != ".well-known" }) return ForbiddenPath
         val relative = relativeParts.filter(String::isNotEmpty).joinToString(File.separator)
         val root = site.root.canonicalFile
         var file = if (relative.isEmpty()) root else File(root, relative).canonicalFile
