@@ -6,6 +6,7 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.IOException
+import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
@@ -23,23 +24,49 @@ import java.util.concurrent.ConcurrentHashMap
 
 /** Read-only HTTP server for app-owned static website files. */
 class LocalStaticServer(private val context: Context, private val store: LocalHostingStore) {
-    @Volatile private var socket: ServerSocket? = null
-    private var acceptExecutor: ExecutorService? = null
+    @Volatile private var sockets: List<ServerSocket> = emptyList()
+    private var acceptExecutors: List<ExecutorService> = emptyList()
     private var clientExecutor: ExecutorService? = null
     private val clients = ConcurrentHashMap.newKeySet<Socket>()
 
     @Synchronized
     fun start(allowLan: Boolean) {
-        if (socket?.isBound == true && socket?.isClosed == false) return
+        if (sockets.isNotEmpty() && sockets.all { it.isBound && !it.isClosed }) return
         stop()
 
         val wifiAddress = if (allowLan) LocalNetwork.wifiIpv4Address(context) else null
-        val listener = ServerSocket()
-        listener.reuseAddress = true
-        val bindAddress = wifiAddress ?: java.net.InetAddress.getByName("127.0.0.1")
-        listener.bind(InetSocketAddress(bindAddress, PORT), 32)
-        socket = listener
-        acceptExecutor = Executors.newSingleThreadExecutor()
+        val bindAddresses: List<InetAddress> = if (wifiAddress != null) {
+            listOf(wifiAddress)
+        } else {
+            listOfNotNull(
+                InetAddress.getByName("127.0.0.1"),
+                runCatching { InetAddress.getByName("::1") }.getOrNull(),
+            )
+        }
+        val listeners = mutableListOf<ServerSocket>()
+        bindAddresses.forEach { bindAddress ->
+            var candidate: ServerSocket? = null
+            try {
+                val created = ServerSocket()
+                candidate = created
+                created.reuseAddress = true
+                created.bind(InetSocketAddress(bindAddress, PORT), 32)
+                listeners += created
+            } catch (error: IOException) {
+                candidate?.let { runCatching { it.close() } }
+                if (listeners.isEmpty() || wifiAddress != null) {
+                    listeners.forEach { runCatching { it.close() } }
+                    throw error
+                }
+                store.recordEvent(
+                    null,
+                    "server.loopback_bind_failed",
+                    "${bindAddress.hostAddress}: ${error.message.orEmpty()}",
+                )
+            }
+        }
+        check(listeners.isNotEmpty()) { "The local website server could not bind to a loopback address." }
+        sockets = listeners.toList()
         clientExecutor = ThreadPoolExecutor(
             MAX_CLIENTS,
             MAX_CLIENTS,
@@ -48,23 +75,24 @@ class LocalStaticServer(private val context: Context, private val store: LocalHo
             ArrayBlockingQueue(MAX_QUEUED_CLIENTS),
             ThreadPoolExecutor.AbortPolicy(),
         )
-        acceptExecutor?.execute { acceptConnections(listener) }
+        acceptExecutors = listeners.map { listener ->
+            Executors.newSingleThreadExecutor().also { executor ->
+                executor.execute { acceptConnections(listener) }
+            }
+        }
         val detail = wifiAddress?.let { "Wi-Fi sharing at ${it.hostAddress}" } ?: "localhost only"
         store.recordEvent(null, "server.started", detail)
     }
 
     @Synchronized
     fun stop() {
-        try {
-            socket?.close()
-        } catch (_: IOException) {
-        }
-        socket = null
+        sockets.forEach { listener -> runCatching { listener.close() } }
+        sockets = emptyList()
         clients.toList().forEach { client -> runCatching { client.close() } }
         clients.clear()
-        acceptExecutor?.shutdownNow()
+        acceptExecutors.forEach { it.shutdownNow() }
+        acceptExecutors = emptyList()
         clientExecutor?.shutdownNow()
-        acceptExecutor = null
         clientExecutor = null
     }
 
@@ -104,6 +132,7 @@ class LocalStaticServer(private val context: Context, private val store: LocalHo
         var requestMethod = ""
         var requestPath = ""
         var requestSiteId: String? = null
+        var localHostSlug: String? = null
         var responseStatus = 0
         var responseBytes = 0L
         var failureMessage: String? = null
@@ -129,6 +158,7 @@ class LocalStaticServer(private val context: Context, private val store: LocalHo
                         return
                     }
                     var headerBytes = 0
+                    var hostHeader: String? = null
                     while (true) {
                         val line = readHttpLine(input, MAX_HEADER_LINE_BYTES)
                             ?: run {
@@ -143,6 +173,22 @@ class LocalStaticServer(private val context: Context, private val store: LocalHo
                             return
                         }
                         if (line.isEmpty()) break
+                        val separator = line.indexOf(':')
+                        if (separator > 0 && line.substring(0, separator).equals("Host", ignoreCase = true)) {
+                            if (hostHeader != null) {
+                                responseStatus = 400
+                                responseBytes = sendError(connection, 400, "Bad Request", requestMethod == "HEAD")
+                                return
+                            }
+                            hostHeader = line.substring(separator + 1).trim()
+                        }
+                    }
+                    val hostSlug = localSiteSlugFromHost(hostHeader)
+                    localHostSlug = hostSlug
+                    requestSiteId = if (hostSlug != null) {
+                        store.findSiteBySlug(hostSlug)?.id
+                    } else {
+                        lookupSiteId(parts[1])
                     }
 
                     val method = parts[0].uppercase()
@@ -151,7 +197,7 @@ class LocalStaticServer(private val context: Context, private val store: LocalHo
                         responseBytes = sendError(connection, 405, "Method Not Allowed", requestMethod == "HEAD")
                         return
                     }
-                    val path = resolveRequestPath(parts[1]) ?: run {
+                    val path = resolveRequestPath(parts[1], localHostSlug) ?: run {
                         responseStatus = 400
                         responseBytes = sendError(connection, 400, "Bad Request", requestMethod == "HEAD")
                         return
@@ -207,22 +253,51 @@ class LocalStaticServer(private val context: Context, private val store: LocalHo
         return store.findSiteBySlug(slug)?.id
     }
 
+    private fun localSiteSlugFromHost(hostHeader: String?): String? {
+        val authority = hostHeader?.trim()?.lowercase()?.takeIf(String::isNotEmpty) ?: return null
+        if (authority.any { it.isWhitespace() } || authority.contains('@')) return null
+
+        val colon = authority.lastIndexOf(':')
+        val hostname = if (colon >= 0) {
+            if (authority.indexOf(':') != colon) return null
+            val port = authority.substring(colon + 1)
+            if (port.isEmpty() || !port.all { it.isDigit() }) return null
+            val portNumber = port.toIntOrNull() ?: return null
+            if (portNumber !in 1..65535) return null
+            authority.substring(0, colon)
+        } else {
+            authority
+        }.trimEnd('.')
+
+        val suffix = ".localhost"
+        if (!hostname.endsWith(suffix)) return null
+        return hostname.removeSuffix(suffix).takeIf { it.matches(Regex("[a-z0-9-]{1,60}")) }
+    }
+
     private fun sanitizeLogPath(target: String): String = target.substringBefore('?')
         .filter { it.code >= 0x20 && it.code != 0x7f }
         .take(MAX_LOG_PATH_CHARS)
 
-    private fun resolveRequestPath(target: String): PathResult? {
+    private fun resolveRequestPath(target: String, localHostSlug: String?): PathResult? {
         if (!target.startsWith('/') || target.startsWith("//")) return null
         val rawPath = target.substringBefore('?').substringBefore('#')
+        if (localHostSlug != null) {
+            return resolveSitePath(localHostSlug, rawPath.split('/').drop(1))
+        }
+
         val rawParts = rawPath.split('/')
         if (rawParts.size < 3 || rawParts[1] != "s") return MissingPath
         val slug = decodePathPart(rawParts[2]) ?: return null
         if (!slug.matches(Regex("[a-z0-9-]{1,60}"))) return MissingPath
 
+        return resolveSitePath(slug, rawParts.drop(3))
+    }
+
+    private fun resolveSitePath(slug: String, rawRelativeParts: List<String>): PathResult? {
         val site = store.findSiteBySlug(slug) ?: return MissingPath
         if (site.status != LocalHostingStore.STATUS_ACTIVE) return MissingPath
 
-        val relativeParts = rawParts.drop(3).map { decodePathPart(it) ?: return null }
+        val relativeParts = rawRelativeParts.map { decodePathPart(it) ?: return null }
         if (relativeParts.any { it == "." || it == ".." || it.contains('\\') || it.contains('\u0000') }) {
             return ForbiddenPath
         }

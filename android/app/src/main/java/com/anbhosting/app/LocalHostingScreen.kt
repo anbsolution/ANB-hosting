@@ -314,7 +314,11 @@ internal fun LocalHostingScreen(
                                         fontSize = 11.sp,
                                     )
                                 } else {
-                                    Text("Preview uses this phone's localhost address.", color = LocalMuted, fontSize = 11.sp)
+                                    Text(
+                                        "Each site gets a phone-only .localhost subdomain for offline preview.",
+                                        color = LocalMuted,
+                                        fontSize = 11.sp,
+                                    )
                                 }
                             }
                         }
@@ -416,6 +420,11 @@ internal fun LocalHostingScreen(
 
                     items(sites, key = { it.id }) { site ->
                         val deployment = deploymentsBySite[site.id]
+                        val siteUrl = if (allowLan && phoneAddress != null) {
+                            "http://$phoneAddress:${LocalStaticServer.PORT}/s/${site.slug}/"
+                        } else {
+                            "http://${site.localHostname}:${LocalStaticServer.PORT}/"
+                        }
                         Card(colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(18.dp)) {
                             Column(Modifier.fillMaxWidth().padding(16.dp)) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -449,10 +458,7 @@ internal fun LocalHostingScreen(
                                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                     if (site.status == LocalHostingStore.STATUS_ACTIVE) {
                                         OutlinedButton(
-                                            onClick = {
-                                                val host = if (allowLan && phoneAddress != null) phoneAddress else "127.0.0.1"
-                                                onOpenPreview("http://$host:${LocalStaticServer.PORT}/s/${site.slug}/")
-                                            },
+                                            onClick = { onOpenPreview(siteUrl) },
                                             enabled = !busy,
                                         ) { Text("Preview") }
                                         OutlinedButton(onClick = { stopSite(site) }, enabled = !busy) { Text("Stop") }
@@ -496,11 +502,7 @@ internal fun LocalHostingScreen(
                                     ) { Text("Rollback latest deployment") }
                                 }
                                 if (site.status == LocalHostingStore.STATUS_ACTIVE) {
-                                    Text(
-                                        "http://${if (allowLan && phoneAddress != null) phoneAddress else "127.0.0.1"}:${LocalStaticServer.PORT}/s/${site.slug}/",
-                                        color = LocalBlue,
-                                        fontSize = 11.sp,
-                                    )
+                                    Text(siteUrl, color = LocalBlue, fontSize = 11.sp)
                                 }
                             }
                         }

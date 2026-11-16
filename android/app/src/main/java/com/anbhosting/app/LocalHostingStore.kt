@@ -15,7 +15,10 @@ data class LocalSite(
     val status: String,
     val createdAt: Long,
     val root: File,
-)
+) {
+    /** Reserved loopback hostname for this phone's offline preview. */
+    val localHostname: String get() = "$slug.localhost"
+}
 
 data class LocalHostingEvent(
     val action: String,

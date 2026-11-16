@@ -14,6 +14,7 @@ This audit describes the local `main` worktree as of 2026-11-16. The GitHub `mai
 - A Next.js dashboard with account, website, overview and activity views, plus a PWA app shell that does not cache API credentials or account data.
 - Android login/signup against the existing API, workspace overview, website list, and website lifecycle actions.
 - Android offline static hosting source: app-private website folders, an on-device SQLite catalog, localhost preview, optional read-only Wi-Fi access, a visible foreground service, and restart-on-next-app-launch recovery for sites left active.
+- Android local virtual-host source: every saved site's `<slug>.localhost` hostname routes to that active site's root for offline phone preview over IPv4/IPv6 loopback; Wi-Fi sharing keeps the existing phone-IP/path URL.
 - Configurable Android partial CPU wake lock while active sites run, with an in-app battery setting and a shortcut to Android app battery settings.
 - Android local website management source: SAF file import/export, delete/rename, small text-file editing, ZIP extraction, and ZIP backup/restore.
 - Android local request/error events, per-site file/storage totals, 30-day successful response payload totals, app memory/CPU samples, and free-storage samples.
@@ -27,7 +28,7 @@ This audit describes the local `main` worktree as of 2026-11-16. The GitHub `mai
 - **Android local hosting:** only static `GET` and `HEAD` are served. Phone preview and Wi-Fi sharing currently use HTTP; TLS is configured for the separate Docker/Nginx LAN host. A foreground service, configurable CPU wake lock, and relaunch recovery exist, but Doze, battery saver, OEM policies, or force-stop can still interrupt hosting; there is no boot-time recovery.
 - **Website management:** file operations are local to Android app-private sites. The Docker-hosted website API still has no customer file upload, editor, archive, backup, or restore endpoints.
 - **Roles and workspaces:** tenant isolation and an initial admin/user role foundation exist; there is no complete member invitation, role-management, or account administration workflow.
-- **Domains and SSL:** the Prisma `Domain` model and Linux local-CA setup exist. There is no domain API/UI, DNS ownership verification, registrar/provider integration, public certificate issuance, or automatic renewal.
+- **Domains and SSL:** the Android phone-local `<site-slug>.localhost` alias is source-implemented for offline preview. The Android resolver returned both `::1` and `127.0.0.1`, and a loopback HTTP request to a temporary test server succeeded through that hostname. The alias is not reachable from other devices. The Prisma `Domain` model and Linux local-CA setup exist, but there is no Android domain management/API, DNS ownership verification, registrar/provider integration, TLS on the phone, public certificate issuance, or automatic renewal.
 - **Database support:** PostgreSQL stores ANB control-plane data. It is not a customer database feature and there is no MySQL-compatible server, per-site database/user management, import/export, or backup workflow.
 - **Monitoring and limits:** Android now has local app/storage measurements and site request totals. It does not enforce per-site CPU/RAM/storage quotas. The Docker engine has container limits, but dashboard storage/bandwidth metrics are not wired to measured production data.
 - **GitHub deployment:** public prebuilt static-folder deployment with branch/tag selection, commit-SHA pinning, stopped-site updates, and a three-snapshot local rollback history (50 MiB per backup) is implemented in source. Private-repository authorization, source builds, and cloud deployment history remain missing.
@@ -48,6 +49,7 @@ This audit describes the local `main` worktree as of 2026-11-16. The GitHub `mai
 
 - Android unit tests added for static serving, path safety, file/archive operations, database migration, resource measurement, public-repository URL/ref validation, branch-to-SHA resolution, pinned archive deployment, rollback, failure cleanup, folder selection, dotfile protection, and the screen-off preference have not run in GitHub Actions for the local commits.
 - The wake-lock acquire/release lifecycle has not been exercised on a physical Android device.
+- The new `<site-slug>.localhost` Host routing and IPv4/IPv6 listener behavior have not run in Android CI; browser preview has not been verified on a physical phone.
 - No APK has been built from the local commits after `e074683`, installed, or tested on an Android device. The available shells have no JDK or Gradle. The requirement to build Android APKs through GitHub Actions remains in force.
 - The latest observed GitHub Actions run was run 5 for remote commit `e074683`; it succeeded. That verifies the old remote revision, not any commits currently ahead of `origin/main`.
 - GitHub Actions could not be triggered for the local commits because GitHub write credentials are not configured in this workspace.
@@ -139,3 +141,4 @@ Before publishing an update APK, identify the signing key used by the existing i
 - Node.js Android build/support status: <https://github.com/nodejs/node/blob/main/BUILDING.md#android>.
 - PHP Android toolchain cross-compilation status: <https://www.php.net/manual/en/install.unix.source.php>.
 - Android isolated service process model: <https://developer.android.com/guide/topics/manifest/service-element#isolated_process>.
+- Reserved `.localhost` hostname behavior: <https://www.rfc-editor.org/rfc/rfc6761.html#section-6.3>.
