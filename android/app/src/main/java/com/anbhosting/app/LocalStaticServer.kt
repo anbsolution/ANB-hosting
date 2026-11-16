@@ -132,7 +132,7 @@ class LocalStaticServer(private val context: Context, private val store: LocalHo
         var requestMethod = ""
         var requestPath = ""
         var requestSiteId: String? = null
-        var localHostSlug: String? = null
+        var localHostname: String? = null
         var responseStatus = 0
         var responseBytes = 0L
         var failureMessage: String? = null
@@ -183,10 +183,10 @@ class LocalStaticServer(private val context: Context, private val store: LocalHo
                             hostHeader = line.substring(separator + 1).trim()
                         }
                     }
-                    val hostSlug = localSiteSlugFromHost(hostHeader)
-                    localHostSlug = hostSlug
-                    requestSiteId = if (hostSlug != null) {
-                        store.findSiteBySlug(hostSlug)?.id
+                    val requestHostname = localHostnameFromHost(hostHeader)
+                    localHostname = requestHostname
+                    requestSiteId = if (requestHostname != null) {
+                        store.findSiteByLocalHostname(requestHostname)?.id
                     } else {
                         lookupSiteId(parts[1])
                     }
@@ -197,7 +197,7 @@ class LocalStaticServer(private val context: Context, private val store: LocalHo
                         responseBytes = sendError(connection, 405, "Method Not Allowed", requestMethod == "HEAD")
                         return
                     }
-                    val path = resolveRequestPath(parts[1], localHostSlug) ?: run {
+                    val path = resolveRequestPath(parts[1], localHostname) ?: run {
                         responseStatus = 400
                         responseBytes = sendError(connection, 400, "Bad Request", requestMethod == "HEAD")
                         return
@@ -253,7 +253,7 @@ class LocalStaticServer(private val context: Context, private val store: LocalHo
         return store.findSiteBySlug(slug)?.id
     }
 
-    private fun localSiteSlugFromHost(hostHeader: String?): String? {
+    private fun localHostnameFromHost(hostHeader: String?): String? {
         val authority = hostHeader?.trim()?.lowercase()?.takeIf(String::isNotEmpty) ?: return null
         if (authority.any { it.isWhitespace() } || authority.contains('@')) return null
 
@@ -271,18 +271,20 @@ class LocalStaticServer(private val context: Context, private val store: LocalHo
 
         val suffix = ".localhost"
         if (!hostname.endsWith(suffix)) return null
-        return hostname.removeSuffix(suffix).takeIf { it.matches(Regex("[a-z0-9-]{1,60}")) }
+        val label = hostname.removeSuffix(suffix)
+        return hostname.takeIf { LOCAL_HOST_LABEL.matches(label) }
     }
 
     private fun sanitizeLogPath(target: String): String = target.substringBefore('?')
         .filter { it.code >= 0x20 && it.code != 0x7f }
         .take(MAX_LOG_PATH_CHARS)
 
-    private fun resolveRequestPath(target: String, localHostSlug: String?): PathResult? {
+    private fun resolveRequestPath(target: String, localHostname: String?): PathResult? {
         if (!target.startsWith('/') || target.startsWith("//")) return null
         val rawPath = target.substringBefore('?').substringBefore('#')
-        if (localHostSlug != null) {
-            return resolveSitePath(localHostSlug, rawPath.split('/').drop(1))
+        if (localHostname != null) {
+            val site = store.findSiteByLocalHostname(localHostname) ?: return MissingPath
+            return resolveSitePath(site.slug, rawPath.split('/').drop(1))
         }
 
         val rawParts = rawPath.split('/')
@@ -395,5 +397,6 @@ class LocalStaticServer(private val context: Context, private val store: LocalHo
         private const val MAX_HEADER_BYTES = 16_384
         private const val MAX_LOG_PATH_CHARS = 200
         private const val MAX_LOG_METHOD_CHARS = 10
+        private val LOCAL_HOST_LABEL = Regex("[a-z0-9](?:[a-z0-9-]{0,58}[a-z0-9])?")
     }
 }

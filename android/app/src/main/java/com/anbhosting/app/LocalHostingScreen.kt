@@ -64,6 +64,7 @@ private data class LocalHostingSnapshot(
     val events: List<LocalHostingEvent>,
     val usageBySite: Map<String, LocalSiteUsage>,
     val deploymentsBySite: Map<String, LocalDeployment>,
+    val aliasesBySite: Map<String, List<LocalHostAlias>>,
     val deviceMetrics: LocalDeviceMetrics,
 )
 
@@ -89,6 +90,7 @@ internal fun LocalHostingScreen(
     var deviceMetrics by remember { mutableStateOf(LocalDeviceMetrics(0L, 0L, null)) }
     var events by remember { mutableStateOf(emptyList<LocalHostingEvent>()) }
     var deploymentsBySite by remember { mutableStateOf(emptyMap<String, LocalDeployment>()) }
+    var aliasesBySite by remember { mutableStateOf(emptyMap<String, List<LocalHostAlias>>()) }
     var allowLan by remember { mutableStateOf(store.isLanSharingEnabled()) }
     var keepCpuAwake by remember { mutableStateOf(store.isKeepCpuAwakeEnabled()) }
     var siteName by remember { mutableStateOf("") }
@@ -101,6 +103,8 @@ internal fun LocalHostingScreen(
     var targetSiteId by remember { mutableStateOf<String?>(null) }
     var pendingDelete by remember { mutableStateOf<LocalSite?>(null) }
     var pendingRollback by remember { mutableStateOf<LocalDeployment?>(null) }
+    var localDomainSite by remember { mutableStateOf<LocalSite?>(null) }
+    var localDomainLabel by remember { mutableStateOf("") }
     var error by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var phoneAddress by remember { mutableStateOf(LocalNetwork.wifiIpv4Address(context)?.hostAddress) }
@@ -120,6 +124,9 @@ internal fun LocalHostingScreen(
                         deploymentsBySite = allSites.mapNotNull { site ->
                             store.latestAppliedDeployment(site.id)?.let { site.id to it }
                         }.toMap(),
+                        aliasesBySite = allSites.associate { site ->
+                            site.id to store.listLocalHostAliases(site.id)
+                        },
                         deviceMetrics = resourceMonitor.sample(),
                     )
                 }
@@ -127,6 +134,7 @@ internal fun LocalHostingScreen(
                 events = result.events
                 usageBySite = result.usageBySite
                 deploymentsBySite = result.deploymentsBySite
+                aliasesBySite = result.aliasesBySite
                 deviceMetrics = result.deviceMetrics
                 allowLan = store.isLanSharingEnabled()
                 keepCpuAwake = store.isKeepCpuAwakeEnabled()
@@ -198,6 +206,7 @@ internal fun LocalHostingScreen(
                     store.listSites().any { it.status == LocalHostingStore.STATUS_ACTIVE }
                 }
                 if (!remaining) onStopHosting()
+                if (localDomainSite?.id == site.id) localDomainSite = null
                 pendingDelete = null
                 reload()
             } catch (failure: Exception) {
@@ -248,6 +257,41 @@ internal fun LocalHostingScreen(
                 reload()
             } catch (failure: Exception) {
                 error = failure.message ?: "Deployment rollback failed."
+            } finally {
+                busy = false
+            }
+        }
+    }
+
+    fun addLocalHostname(site: LocalSite) {
+        scope.launch {
+            busy = true
+            error = ""
+            try {
+                withContext(Dispatchers.IO) {
+                    store.createLocalHostAlias(site.id, localDomainLabel)
+                }
+                localDomainLabel = ""
+                reload()
+            } catch (failure: Exception) {
+                error = failure.message ?: "Local hostname could not be added."
+            } finally {
+                busy = false
+            }
+        }
+    }
+
+    fun removeLocalHostname(alias: LocalHostAlias) {
+        scope.launch {
+            busy = true
+            error = ""
+            try {
+                withContext(Dispatchers.IO) {
+                    store.deleteLocalHostAlias(alias.siteId, alias.id)
+                }
+                reload()
+            } catch (failure: Exception) {
+                error = failure.message ?: "Local hostname could not be removed."
             } finally {
                 busy = false
             }
@@ -472,6 +516,15 @@ internal fun LocalHostingScreen(
                                         Text("Delete website", color = Color(0xFFB42318))
                                     }
                                 }
+                                OutlinedButton(
+                                    onClick = {
+                                        localDomainSite = site
+                                        localDomainLabel = ""
+                                        error = ""
+                                    },
+                                    enabled = !busy,
+                                    modifier = Modifier.fillMaxWidth(),
+                                ) { Text("Manage local domains (${(aliasesBySite[site.id]?.size ?: 0) + 1})") }
                                 if (site.status == LocalHostingStore.STATUS_STOPPED) {
                                     OutlinedButton(
                                         onClick = {
@@ -562,6 +615,66 @@ internal fun LocalHostingScreen(
                 ) { Text("Create") }
             },
             dismissButton = { TextButton(onClick = { showCreate = false }) { Text("Cancel") } },
+        )
+    }
+
+    localDomainSite?.let { site ->
+        val aliases = aliasesBySite[site.id].orEmpty()
+        AlertDialog(
+            onDismissRequest = { if (!busy) localDomainSite = null },
+            title = { Text("Local domains · ${site.name}") },
+            text = {
+                Column(
+                    modifier = Modifier.heightIn(max = 440.dp).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        "These .localhost names route to this website on this phone, including while offline. They are not public domains and do not enable HTTPS.",
+                        color = LocalMuted,
+                        fontSize = 12.sp,
+                    )
+                    Text("Default hostname", color = LocalNavy, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
+                    Text(site.localHostname, color = LocalBlue, fontSize = 12.sp)
+                    aliases.forEach { alias ->
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text(alias.hostname, color = LocalNavy, fontSize = 12.sp)
+                                Text("Offline phone alias", color = LocalMuted, fontSize = 10.sp)
+                            }
+                            TextButton(
+                                onClick = { removeLocalHostname(alias) },
+                                enabled = !busy,
+                            ) { Text("Remove", color = Color(0xFFB42318)) }
+                            TextButton(
+                                onClick = { onOpenPreview("http://${alias.hostname}:${LocalStaticServer.PORT}/") },
+                                enabled = !busy && site.status == LocalHostingStore.STATUS_ACTIVE,
+                            ) { Text("Open") }
+                        }
+                    }
+                    OutlinedTextField(
+                        value = localDomainLabel,
+                        onValueChange = { if (it.length <= 60) localDomainLabel = it },
+                        label = { Text("New local hostname") },
+                        placeholder = { Text("shop, then .localhost is added") },
+                        singleLine = true,
+                        enabled = !busy,
+                    )
+                    if (localDomainLabel.isNotBlank()) {
+                        Text("Preview: ${localDomainLabel.trim().lowercase()}.localhost", color = LocalBlue, fontSize = 11.sp)
+                    }
+                    if (busy) CircularProgressIndicator(Modifier.size(22.dp))
+                    if (error.isNotBlank()) Text(error, color = Color(0xFFB42318), fontSize = 12.sp)
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = { addLocalHostname(site) },
+                    enabled = !busy && localDomainLabel.isNotBlank(),
+                ) { Text(if (busy) "Saving…" else "Add local domain") }
+            },
+            dismissButton = {
+                TextButton(onClick = { if (!busy) localDomainSite = null }, enabled = !busy) { Text("Done") }
+            },
         )
     }
 

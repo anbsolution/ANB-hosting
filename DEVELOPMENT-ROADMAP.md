@@ -15,6 +15,7 @@ This audit describes the local `main` worktree as of 2026-11-16. The GitHub `mai
 - Android login/signup against the existing API, workspace overview, website list, and website lifecycle actions.
 - Android offline static hosting source: app-private website folders, an on-device SQLite catalog, localhost preview, optional read-only Wi-Fi access, a visible foreground service, and restart-on-next-app-launch recovery for sites left active.
 - Android local virtual-host source: every saved site's `<slug>.localhost` hostname routes to that active site's root for offline phone preview over IPv4/IPv6 loopback; Wi-Fi sharing keeps the existing phone-IP/path URL.
+- Android local-domain source: each site can register and remove additional `.localhost` aliases in SQLite; the Host router resolves those aliases to the selected site's files, and the local dashboard exposes alias management and preview.
 - Configurable Android partial CPU wake lock while active sites run, with an in-app battery setting and a shortcut to Android app battery settings.
 - Android local website management source: SAF file import/export, delete/rename, small text-file editing, ZIP extraction, and ZIP backup/restore.
 - Android local request/error events, per-site file/storage totals, 30-day successful response payload totals, app memory/CPU samples, and free-storage samples.
@@ -30,7 +31,7 @@ This audit describes the local `main` worktree as of 2026-11-16. The GitHub `mai
 - **Android local hosting:** only static `GET` and `HEAD` are served. Phone preview and Wi-Fi sharing currently use HTTP; TLS is configured for the separate Docker/Nginx LAN host. A foreground service, configurable CPU wake lock, and relaunch recovery exist, but Doze, battery saver, OEM policies, or force-stop can still interrupt hosting; there is no boot-time recovery.
 - **Website management:** file operations are local to Android app-private sites. The Docker-hosted website API still has no customer file upload, editor, archive, backup, or restore endpoints.
 - **Roles and workspaces:** tenant isolation and an initial admin/user role foundation exist; there is no complete member invitation, role-management, or account administration workflow.
-- **Domains and SSL:** the Android phone-local `<site-slug>.localhost` alias is source-implemented for offline preview. The Android resolver returned both `::1` and `127.0.0.1`, and a loopback HTTP request to a temporary test server succeeded through that hostname. The alias is not reachable from other devices. The Prisma `Domain` model and Linux local-CA setup exist, but there is no Android domain management/API, DNS ownership verification, registrar/provider integration, TLS on the phone, public certificate issuance, or automatic renewal.
+- **Domains and SSL:** the Android phone-local `<site-slug>.localhost` hostname and extra `.localhost` alias management are source-implemented for offline preview. The Android resolver returned both `::1` and `127.0.0.1`, and a loopback HTTP request to a temporary test server succeeded through the default hostname. These reserved aliases resolve to the current phone and are not reachable from other devices as those same names. The Prisma `Domain` model and Linux local-CA setup exist, but there is no Android custom-domain API, DNS ownership verification, registrar/provider integration, TLS on the phone, public certificate issuance, or automatic renewal.
 - **Database support:** PostgreSQL stores ANB control-plane data. It is not a customer database feature and there is no MySQL-compatible server, per-site database/user management, import/export, or backup workflow.
 - **Monitoring and limits:** Android now has local app/storage measurements and site request totals. It does not enforce per-site CPU/RAM/storage quotas. The Docker engine has container limits, but dashboard storage/bandwidth metrics are not wired to measured production data.
 - **GitHub deployment:** public prebuilt static-folder deployment with branch/tag selection, commit-SHA pinning, stopped-site updates, and a three-snapshot local rollback history (50 MiB per backup) is implemented in source. Private-repository authorization, source builds, and cloud deployment history remain missing.
@@ -57,6 +58,7 @@ This audit describes the local `main` worktree as of 2026-11-16. The GitHub `mai
 - No APK has been built from the local commits after `e074683`, installed, or tested on an Android device. The available shells have no JDK or Gradle. The requirement to build Android APKs through GitHub Actions remains in force.
 - The latest observed GitHub Actions run was run 5 for remote commit `e074683`; it succeeded. That verifies the old remote revision, not any commits currently ahead of `origin/main`.
 - The new CPython Android emulator workflow has not run. Its source configuration and pinned archive checksums have only been inspected locally; no Python runtime claim is based on this unrun workflow.
+- The Android local-domain alias schema migration, CRUD screen, Host routing, and new Robolectric tests have not run in Android CI or on a phone.
 - GitHub Actions could not be triggered for the local commits because GitHub write credentials are not configured in this workspace.
 - No full Docker Compose, NGINX, DNS, ACME, GitHub deployment, or live multi-device hosting test was performed in this audit.
 - The monorepo lint, formatting, typecheck, and JavaScript test commands passed locally. API tests: 2 passed; hosting-engine tests: 2 passed. `npm run build` could not finish on Android because Next.js requested a nonexistent `@next/swc-android-arm64` binary. This device limitation is not an Android CI build result.
@@ -121,6 +123,7 @@ The existing web/cloud path remains separate: web or Android client → LAN NGIN
 
 ### Phase 6 — Domains and certificates
 
+- Exercise the local `.localhost` alias manager, database migration, and Host routing with Android CI and a real device.
 - Implement real domain records, host routing, ownership challenges, and DNS verification with documented provider adapters.
 - For phone-only local hosting, provide local-network naming/private certificate options and explain that public DNS cannot route through carrier NAT or a private Wi-Fi address.
 - Add Let's Encrypt issuance and renewal only for a deployment with working public ingress or a configured DNS-01 provider and securely stored credentials.

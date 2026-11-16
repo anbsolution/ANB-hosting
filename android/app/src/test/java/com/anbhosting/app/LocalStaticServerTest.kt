@@ -80,6 +80,23 @@ class LocalStaticServerTest {
     }
 
     @Test
+    fun servesSiteFromManagedOfflineHostAliasAndStopsRoutingWhenAliasIsDeleted() {
+        val site = store.createSite("Managed local domain")
+        site.root.resolve("index.html").writeText("managed-local-host")
+        val alias = store.createLocalHostAlias(site.id, "shop")
+        store.setSiteStatus(site.id, LocalHostingStore.STATUS_ACTIVE)
+        server = LocalStaticServer(context, store).also { it.start(allowLan = false) }
+
+        val response = request("/", host = "${alias.hostname}:${LocalStaticServer.PORT}")
+        assertTrue(response.startsWith("HTTP/1.1 200 OK"))
+        assertTrue(response.endsWith("managed-local-host"))
+
+        store.deleteLocalHostAlias(site.id, alias.id)
+        val missingAlias = request("/", host = alias.hostname)
+        assertTrue(missingAlias.startsWith("HTTP/1.1 404 Not Found"))
+    }
+
+    @Test
     fun servesPhoneLocalSubdomainOverIpv6Loopback() {
         val site = store.createSite("IPv6 local subdomain")
         store.setSiteStatus(site.id, LocalHostingStore.STATUS_ACTIVE)

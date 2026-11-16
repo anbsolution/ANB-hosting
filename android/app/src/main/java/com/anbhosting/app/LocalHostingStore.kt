@@ -3,6 +3,7 @@ package com.anbhosting.app
 import android.content.ContentValues
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
+import android.database.sqlite.SQLiteConstraintException
 import android.database.sqlite.SQLiteOpenHelper
 import java.io.File
 import java.time.LocalDate
@@ -23,6 +24,13 @@ data class LocalSite(
 data class LocalHostingEvent(
     val action: String,
     val detail: String,
+    val createdAt: Long,
+)
+
+data class LocalHostAlias(
+    val id: String,
+    val siteId: String,
+    val hostname: String,
     val createdAt: Long,
 )
 
@@ -71,11 +79,13 @@ class LocalHostingStore(context: Context) : SQLiteOpenHelper(
         db.execSQL("CREATE INDEX events_created_at_idx ON events(created_at DESC)")
         createTrafficTable(db)
         createDeploymentTable(db)
+        createLocalHostAliasTable(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion < 2) createTrafficTable(db)
         if (oldVersion < 3) createDeploymentTable(db)
+        if (oldVersion < 4) createLocalHostAliasTable(db)
     }
 
     fun listSites(): List<LocalSite> {
@@ -127,8 +137,12 @@ class LocalHostingStore(context: Context) : SQLiteOpenHelper(
             .ifBlank { "site" }
             .take(36)
             .trimEnd('-')
-        val id = UUID.randomUUID().toString()
-        val slug = "$base-${id.take(8)}"
+        var id = UUID.randomUUID().toString()
+        var slug = "$base-${id.take(8)}"
+        while (findSiteBySlug(slug) != null || localHostAliasExists("$slug.localhost")) {
+            id = UUID.randomUUID().toString()
+            slug = "$base-${id.take(8)}"
+        }
         val root = File(sitesDirectory, slug)
         check(root.mkdirs()) { "Website folder could not be created." }
 
@@ -204,6 +218,7 @@ class LocalHostingStore(context: Context) : SQLiteOpenHelper(
             null,
         ).use { cursor -> buildList { while (cursor.moveToNext()) add(cursor.getString(0)) } }
         writableDatabase.delete("sites", "id = ?", arrayOf(id))
+        writableDatabase.delete("local_host_aliases", "site_id = ?", arrayOf(id))
         writableDatabase.delete("daily_traffic", "site_id = ?", arrayOf(id))
         writableDatabase.delete("deployments", "site_id = ?", arrayOf(id))
         backupFileNames.forEach { backupName ->
@@ -213,6 +228,114 @@ class LocalHostingStore(context: Context) : SQLiteOpenHelper(
         }
         recordEvent(id, "website.deleted", slug)
     }
+
+    fun listLocalHostAliases(siteId: String): List<LocalHostAlias> {
+        val aliases = mutableListOf<LocalHostAlias>()
+        readableDatabase.query(
+            "local_host_aliases",
+            arrayOf("id", "site_id", "hostname", "created_at"),
+            "site_id = ?",
+            arrayOf(siteId),
+            null,
+            null,
+            "hostname COLLATE NOCASE ASC",
+        ).use { cursor ->
+            while (cursor.moveToNext()) {
+                aliases += LocalHostAlias(
+                    id = cursor.getString(0),
+                    siteId = cursor.getString(1),
+                    hostname = cursor.getString(2),
+                    createdAt = cursor.getLong(3),
+                )
+            }
+        }
+        return aliases
+    }
+
+    /** Create an additional offline hostname under the reserved .localhost domain. */
+    fun createLocalHostAlias(siteId: String, rawLabel: String): LocalHostAlias {
+        val site = findSite(siteId) ?: error("Website no longer exists.")
+        val label = rawLabel.trim().lowercase()
+        require(label.length in 1..60 && LOCAL_HOST_LABEL.matches(label)) {
+            "Enter a single .localhost label using letters, numbers, and interior hyphens."
+        }
+        require(label != "localhost") { "Use a different .localhost label." }
+        require(label != site.slug) { "This website already has that default hostname." }
+        check(findSiteBySlug(label) == null) { "That hostname belongs to another website." }
+
+        val alias = LocalHostAlias(
+            id = UUID.randomUUID().toString(),
+            siteId = siteId,
+            hostname = "$label.localhost",
+            createdAt = System.currentTimeMillis(),
+        )
+        try {
+            writableDatabase.insertOrThrow(
+                "local_host_aliases",
+                null,
+                ContentValues().apply {
+                    put("id", alias.id)
+                    put("site_id", alias.siteId)
+                    put("hostname", alias.hostname)
+                    put("created_at", alias.createdAt)
+                },
+            )
+        } catch (_: SQLiteConstraintException) {
+            throw IllegalArgumentException("That .localhost hostname is already assigned.")
+        }
+        recordEvent(siteId, "domain.local_created", alias.hostname)
+        return alias
+    }
+
+    fun deleteLocalHostAlias(siteId: String, aliasId: String) {
+        val alias = readableDatabase.query(
+            "local_host_aliases",
+            arrayOf("hostname"),
+            "id = ? AND site_id = ?",
+            arrayOf(aliasId, siteId),
+            null,
+            null,
+            null,
+            "1",
+        ).use { cursor ->
+            if (!cursor.moveToFirst()) return
+            cursor.getString(0)
+        }
+        val removed = writableDatabase.delete(
+            "local_host_aliases",
+            "id = ? AND site_id = ?",
+            arrayOf(aliasId, siteId),
+        )
+        check(removed == 1) { "Local hostname no longer exists." }
+        recordEvent(siteId, "domain.local_deleted", alias)
+    }
+
+    fun findSiteByLocalHostname(hostname: String): LocalSite? {
+        val canonical = hostname.trimEnd('.').lowercase()
+        val label = canonical.removeSuffix(".localhost")
+        if (!canonical.endsWith(".localhost") || !LOCAL_HOST_LABEL.matches(label)) return null
+
+        findSiteBySlug(label)?.let { return it }
+        return readableDatabase.rawQuery(
+            """SELECT sites.id, sites.name, sites.slug, sites.status, sites.created_at
+                FROM local_host_aliases
+                JOIN sites ON sites.id = local_host_aliases.site_id
+                WHERE local_host_aliases.hostname = ?
+                LIMIT 1""".trimIndent(),
+            arrayOf(canonical),
+        ).use { cursor -> if (cursor.moveToFirst()) cursor.toLocalSite() else null }
+    }
+
+    private fun localHostAliasExists(hostname: String): Boolean = readableDatabase.query(
+        "local_host_aliases",
+        arrayOf("id"),
+        "hostname = ?",
+        arrayOf(hostname),
+        null,
+        null,
+        null,
+        "1",
+    ).use { cursor -> cursor.moveToFirst() }
 
     fun latestAppliedDeployment(siteId: String): LocalDeployment? = readableDatabase.query(
         "deployments",
@@ -445,16 +568,29 @@ class LocalHostingStore(context: Context) : SQLiteOpenHelper(
         db.execSQL("CREATE INDEX deployments_site_created_idx ON deployments(site_id, created_at DESC)")
     }
 
+    private fun createLocalHostAliasTable(db: SQLiteDatabase) {
+        db.execSQL(
+            """CREATE TABLE local_host_aliases (
+                id TEXT PRIMARY KEY NOT NULL,
+                site_id TEXT NOT NULL,
+                hostname TEXT NOT NULL COLLATE NOCASE UNIQUE,
+                created_at INTEGER NOT NULL
+            )""".trimIndent(),
+        )
+        db.execSQL("CREATE INDEX local_host_aliases_site_idx ON local_host_aliases(site_id, hostname)")
+    }
+
     companion object {
         const val STATUS_ACTIVE = "ACTIVE"
         const val STATUS_STOPPED = "STOPPED"
         const val DEPLOYMENT_APPLIED = "APPLIED"
         const val DEPLOYMENT_ROLLED_BACK = "ROLLED_BACK"
         private const val DATABASE_NAME = "anb-local-hosting.db"
-        private const val DATABASE_VERSION = 3
+        private const val DATABASE_VERSION = 4
         private const val PREFERENCES_NAME = "local-hosting-preferences"
         private const val PREF_LAN_SHARING = "lan-sharing-enabled"
         private const val PREF_KEEP_CPU_AWAKE = "keep-cpu-awake-while-hosting"
+        private val LOCAL_HOST_LABEL = Regex("[a-z0-9](?:[a-z0-9-]{0,58}[a-z0-9])?")
         private val DEPLOYMENT_COLUMNS = arrayOf(
             "id", "site_id", "repository", "ref", "commit_sha", "backup_file", "status", "created_at",
         )
