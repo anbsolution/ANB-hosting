@@ -14,6 +14,7 @@ This audit describes the local `main` worktree as of 2026-11-16. The GitHub `mai
 - A Next.js dashboard with account, website, overview and activity views, plus a PWA app shell that does not cache API credentials or account data.
 - Android login/signup against the existing API, workspace overview, website list, and website lifecycle actions.
 - Android offline static hosting source: app-private website folders, an on-device SQLite catalog, localhost preview, optional read-only Wi-Fi access, a visible foreground service, and restart-on-next-app-launch recovery for sites left active.
+- Configurable Android partial CPU wake lock while active sites run, with an in-app battery setting and a shortcut to Android app battery settings.
 - Android local website management source: SAF file import/export, delete/rename, small text-file editing, ZIP extraction, and ZIP backup/restore.
 - Android local request/error events, per-site file/storage totals, 30-day successful response payload totals, app memory/CPU samples, and free-storage samples.
 - Android public GitHub repository deployment source: read public repository metadata, download the default-branch ZIP archive, publish a prebuilt folder containing `index.html`, atomically replace a stopped site's files, and record local deployment events. ZIP and path limits are enforced; no build is run.
@@ -23,7 +24,7 @@ This audit describes the local `main` worktree as of 2026-11-16. The GitHub `mai
 
 ## Partially added
 
-- **Android local hosting:** only static `GET` and `HEAD` are served. Phone preview and Wi-Fi sharing currently use HTTP; TLS is configured for the separate Docker/Nginx LAN host. A foreground service and lifecycle recovery exist, but Android may restrict or kill long-running services and there is no boot-time recovery or OEM-specific battery handling.
+- **Android local hosting:** only static `GET` and `HEAD` are served. Phone preview and Wi-Fi sharing currently use HTTP; TLS is configured for the separate Docker/Nginx LAN host. A foreground service, configurable CPU wake lock, and relaunch recovery exist, but Doze, battery saver, OEM policies, or force-stop can still interrupt hosting; there is no boot-time recovery.
 - **Website management:** file operations are local to Android app-private sites. The Docker-hosted website API still has no customer file upload, editor, archive, backup, or restore endpoints.
 - **Roles and workspaces:** tenant isolation and an initial admin/user role foundation exist; there is no complete member invitation, role-management, or account administration workflow.
 - **Domains and SSL:** the Prisma `Domain` model and Linux local-CA setup exist. There is no domain API/UI, DNS ownership verification, registrar/provider integration, public certificate issuance, or automatic renewal.
@@ -45,10 +46,11 @@ This audit describes the local `main` worktree as of 2026-11-16. The GitHub `mai
 
 ## Not yet tested
 
-- Android unit tests added for static serving, path safety, file/archive operations, database migration, and resource measurement have not run in GitHub Actions for the local commits.
-- New unit tests for public-repository URL validation, successful static archive deployment, private-repository rejection, deployment failure cleanup, static folder selection, and dotfile protection have not run yet.
-- No APK has been built from local commit `58b968e`, installed, or tested on an Android device. This shell has no JDK or Gradle. The requirement to build Android APKs through GitHub Actions remains in force.
-- The latest observed GitHub Actions run was run 5 for remote commit `e074683`; it succeeded. That verifies the old remote revision, not local commits `f15579d`, `7d2bc67`, or `58b968e`.
+- Android unit tests added for static serving, path safety, file/archive operations, database migration, resource measurement, public-repository URL validation, static archive deployment/failure cleanup, folder selection, dotfile protection, and the screen-off preference have not run in GitHub Actions for the local commits.
+- The wake-lock acquire/release lifecycle has not been exercised on a physical Android device.
+- No APK has been built from the local commits after `e074683`, installed, or tested on an Android device. The available shells have no JDK or Gradle. The requirement to build Android APKs through GitHub Actions remains in force.
+- The latest observed GitHub Actions run was run 5 for remote commit `e074683`; it succeeded. That verifies the old remote revision, not any commits currently ahead of `origin/main`.
+- GitHub Actions could not be triggered for the local commits because GitHub write credentials are not configured in this workspace.
 - No full Docker Compose, NGINX, DNS, ACME, GitHub deployment, or live multi-device hosting test was performed in this audit.
 - The monorepo lint, formatting, typecheck, and JavaScript test commands passed locally. API tests: 2 passed; hosting-engine tests: 2 passed. `npm run build` could not finish on Android because Next.js requested a nonexistent `@next/swc-android-arm64` binary. This device limitation is not an Android CI build result.
 
@@ -76,9 +78,10 @@ The existing web/cloud path remains separate: web or Android client → LAN NGIN
 
 ### Phase 1 — Stabilize offline static hosting
 
-- Run the new Android CI tests and debug APK build for the three local commits; fix every compile/test failure.
+- Run the Android CI tests and debug APK build for all local commits after `e074683`; fix every compile/test failure.
 - Exercise create/start/preview/stop, Wi-Fi rebind, notification denial, process death/relaunch, archive safety, backup restore, and storage accounting on Android devices.
 - Improve foreground-service and battery guidance using supported Android APIs, while showing when the OS has stopped hosting.
+- Verify CPU wake-lock acquisition/release on supported Android versions and measure screen-off serving, battery use, Doze behavior, and user battery-setting changes across device vendors.
 - Keep local HTTP sharing off by default and clearly distinguish phone HTTP preview from the separate LAN host's HTTPS setup.
 
 ### Phase 2 — Runtime foundation and PHP

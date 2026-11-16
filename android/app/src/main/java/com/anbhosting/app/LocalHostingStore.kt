@@ -253,6 +253,13 @@ class LocalHostingStore(context: Context) : SQLiteOpenHelper(
         recordEvent(null, "server.lan_sharing_changed", if (enabled) "enabled" else "disabled")
     }
 
+    fun isKeepCpuAwakeEnabled(): Boolean = preferences.getBoolean(PREF_KEEP_CPU_AWAKE, true)
+
+    fun setKeepCpuAwakeEnabled(enabled: Boolean) {
+        preferences.edit().putBoolean(PREF_KEEP_CPU_AWAKE, enabled).apply()
+        recordEvent(null, "server.screen_off_hosting_changed", if (enabled) "enabled" else "disabled")
+    }
+
     fun siteRoot(slug: String): File {
         require(slug.matches(Regex("[a-z0-9-]{1,60}"))) { "Invalid website address." }
         return File(sitesDirectory, slug)
@@ -289,5 +296,6 @@ class LocalHostingStore(context: Context) : SQLiteOpenHelper(
         private const val DATABASE_VERSION = 2
         private const val PREFERENCES_NAME = "local-hosting-preferences"
         private const val PREF_LAN_SHARING = "lan-sharing-enabled"
+        private const val PREF_KEEP_CPU_AWAKE = "keep-cpu-awake-while-hosting"
     }
 }

@@ -1,5 +1,8 @@
 package com.anbhosting.app
 
+import android.content.Intent
+import android.net.Uri
+import android.provider.Settings
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -82,6 +85,7 @@ internal fun LocalHostingScreen(
     var deviceMetrics by remember { mutableStateOf(LocalDeviceMetrics(0L, 0L, null)) }
     var events by remember { mutableStateOf(emptyList<LocalHostingEvent>()) }
     var allowLan by remember { mutableStateOf(store.isLanSharingEnabled()) }
+    var keepCpuAwake by remember { mutableStateOf(store.isKeepCpuAwakeEnabled()) }
     var siteName by remember { mutableStateOf("") }
     var showCreate by remember { mutableStateOf(false) }
     var showGithubDeployment by remember { mutableStateOf(false) }
@@ -113,6 +117,7 @@ internal fun LocalHostingScreen(
                 usageBySite = result.usageBySite
                 deviceMetrics = result.deviceMetrics
                 allowLan = store.isLanSharingEnabled()
+                keepCpuAwake = store.isKeepCpuAwakeEnabled()
                 phoneAddress = LocalNetwork.wifiIpv4Address(context)?.hostAddress
                 error = ""
             } catch (failure: Exception) {
@@ -275,6 +280,50 @@ internal fun LocalHostingScreen(
                                 } else {
                                     Text("Preview uses this phone's localhost address.", color = LocalMuted, fontSize = 11.sp)
                                 }
+                            }
+                        }
+                    }
+
+                    item {
+                        Card(colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(18.dp)) {
+                            Column(Modifier.fillMaxWidth().padding(16.dp)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Column(Modifier.weight(1f)) {
+                                        Text("Keep hosting responsive with screen off", color = LocalNavy, fontWeight = FontWeight.Bold)
+                                        Text("Uses more battery while local sites are running.", color = LocalMuted, fontSize = 12.sp)
+                                    }
+                                    Switch(
+                                        checked = keepCpuAwake,
+                                        onCheckedChange = { enabled ->
+                                            keepCpuAwake = enabled
+                                            error = ""
+                                            scope.launch {
+                                                try {
+                                                    withContext(Dispatchers.IO) { store.setKeepCpuAwakeEnabled(enabled) }
+                                                    if (sites.any { it.status == LocalHostingStore.STATUS_ACTIVE }) onReconfigureHosting()
+                                                    reload()
+                                                } catch (failure: Exception) {
+                                                    keepCpuAwake = !enabled
+                                                    error = failure.message ?: "The screen-off hosting setting could not be saved."
+                                                }
+                                            }
+                                        },
+                                    )
+                                }
+                                Text(
+                                    "Android battery saver and Doze may still delay network access. Adjust this app's battery use in system settings for the best chance of continuous hosting.",
+                                    color = LocalMuted,
+                                    fontSize = 11.sp,
+                                )
+                                TextButton(
+                                    onClick = {
+                                        val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                                            data = Uri.fromParts("package", context.packageName, null)
+                                        }
+                                        runCatching { context.startActivity(intent) }
+                                            .onFailure { error = "App battery settings could not be opened." }
+                                    },
+                                ) { Text("Open app battery settings") }
                             }
                         }
                     }

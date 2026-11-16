@@ -6,6 +6,7 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -30,6 +31,7 @@ class LocalFileManagerTest {
         context = RuntimeEnvironment.getApplication()
         context.deleteDatabase("anb-local-hosting.db")
         context.filesDir.resolve("local-sites").deleteRecursively()
+        context.getSharedPreferences("local-hosting-preferences", Context.MODE_PRIVATE).edit().clear().commit()
         store = LocalHostingStore(context)
         site = store.createSite("File tools")
         files = LocalFileManager(store)
@@ -136,6 +138,15 @@ class LocalFileManagerTest {
         store.recordTraffic("legacy-site", 1536)
 
         assertEquals(1536L, store.trafficLast30Days("legacy-site"))
+    }
+
+    @Test
+    fun keepsScreenOffHostingEnabledByDefaultAndAllowsBatterySavingOptOut() {
+        assertTrue(store.isKeepCpuAwakeEnabled())
+
+        store.setKeepCpuAwakeEnabled(false)
+
+        assertFalse(store.isKeepCpuAwakeEnabled())
     }
 
     private fun zipOf(vararg entries: Pair<String, String>): ByteArray {

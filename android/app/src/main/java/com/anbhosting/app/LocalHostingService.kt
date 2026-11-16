@@ -13,12 +13,14 @@ import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 import java.util.concurrent.Executors
 
 class LocalHostingService : Service() {
     private val executor = Executors.newSingleThreadExecutor()
     private lateinit var store: LocalHostingStore
     private var server: LocalStaticServer? = null
+    private var hostingWakeLock: PowerManager.WakeLock? = null
     private lateinit var connectivityManager: ConnectivityManager
     private var wifiCallbackRegistered = false
     private val wifiCallback = object : ConnectivityManager.NetworkCallback() {
@@ -49,10 +51,13 @@ class LocalHostingService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
             executor.execute {
-                store.listSites().filter { it.status == LocalHostingStore.STATUS_ACTIVE }
-                    .forEach { store.setSiteStatus(it.id, LocalHostingStore.STATUS_STOPPED) }
-                serverRunning = false
-                stopSelf(startId)
+                try {
+                    store.listSites().filter { it.status == LocalHostingStore.STATUS_ACTIVE }
+                        .forEach { store.setSiteStatus(it.id, LocalHostingStore.STATUS_STOPPED) }
+                } finally {
+                    stopLocalHosting()
+                    stopSelf(startId)
+                }
             }
             return START_NOT_STICKY
         }
@@ -69,30 +74,24 @@ class LocalHostingService : Service() {
         }
 
         executor.execute {
-            val activeSites = store.listSites().filter { it.status == LocalHostingStore.STATUS_ACTIVE }
-            if (activeSites.isEmpty()) {
-                serverRunning = false
-                stopSelf(startId)
-                return@execute
-            }
-            if (intent?.action == ACTION_RECONFIGURE) {
-                serverRunning = false
-                server?.stop()
-                server = null
-            }
-            if (server == null) {
-                try {
+            try {
+                val activeSites = store.listSites().filter { it.status == LocalHostingStore.STATUS_ACTIVE }
+                if (activeSites.isEmpty()) {
+                    stopLocalHosting()
+                    stopSelf(startId)
+                    return@execute
+                }
+                if (intent?.action == ACTION_RECONFIGURE) stopLocalHosting()
+                updateHostingWakeLock(store.isKeepCpuAwakeEnabled())
+                if (server == null) {
                     server = LocalStaticServer(this, store).also { it.start(store.isLanSharingEnabled()) }
                     serverRunning = true
-                } catch (error: Exception) {
-                    serverRunning = false
-                    activeSites.forEach { store.setSiteStatus(it.id, LocalHostingStore.STATUS_STOPPED) }
-                    store.recordEvent(null, "server.start_failed", error.message.orEmpty())
-                    stopSelf(startId)
                 }
+                (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
+                    .notify(NOTIFICATION_ID, buildNotification())
+            } catch (error: Exception) {
+                failHosting(startId, "server.start_failed", error)
             }
-            (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
-                .notify(NOTIFICATION_ID, buildNotification())
         }
         return START_STICKY
     }
@@ -102,9 +101,7 @@ class LocalHostingService : Service() {
             runCatching { connectivityManager.unregisterNetworkCallback(wifiCallback) }
             wifiCallbackRegistered = false
         }
-        server?.stop()
-        server = null
-        serverRunning = false
+        stopLocalHosting()
         executor.shutdownNow()
         super.onDestroy()
     }
@@ -135,24 +132,76 @@ class LocalHostingService : Service() {
         if (!::store.isInitialized || !store.isLanSharingEnabled()) return
         runCatching {
             executor.execute {
-                if (store.listSites().none { it.status == LocalHostingStore.STATUS_ACTIVE }) return@execute
-                serverRunning = false
-                server?.stop()
-                server = null
+                val activeSites = store.listSites().filter { it.status == LocalHostingStore.STATUS_ACTIVE }
+                if (activeSites.isEmpty()) {
+                    stopLocalHosting()
+                    stopSelf()
+                    return@execute
+                }
+                stopLocalHosting()
+                updateHostingWakeLock(store.isKeepCpuAwakeEnabled())
                 try {
                     server = LocalStaticServer(this, store).also { it.start(true) }
                     serverRunning = true
                     (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
                         .notify(NOTIFICATION_ID, buildNotification())
                 } catch (error: Exception) {
-                    serverRunning = false
-                    store.listSites().filter { it.status == LocalHostingStore.STATUS_ACTIVE }
-                        .forEach { store.setSiteStatus(it.id, LocalHostingStore.STATUS_STOPPED) }
-                    store.recordEvent(null, "server.network_rebind_failed", error.message.orEmpty())
-                    (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
-                        .cancel(NOTIFICATION_ID)
-                    stopSelf()
+                    failHosting(0, "server.network_rebind_failed", error, activeSites)
                 }
+            } catch (error: Exception) {
+                failHosting(0, "server.network_rebind_failed", error)
+            }
+        }
+    }
+
+    private fun stopLocalHosting() {
+        serverRunning = false
+        runCatching { server?.stop() }
+        server = null
+        updateHostingWakeLock(false)
+    }
+
+    private fun failHosting(
+        startId: Int,
+        event: String,
+        error: Exception,
+        activeSites: List<LocalSite>? = null,
+    ) {
+        stopLocalHosting()
+        runCatching {
+            (activeSites ?: store.listSites().filter { it.status == LocalHostingStore.STATUS_ACTIVE })
+                .forEach { store.setSiteStatus(it.id, LocalHostingStore.STATUS_STOPPED) }
+        }
+        runCatching { store.recordEvent(null, event, error.message.orEmpty()) }
+        runCatching { (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).cancel(NOTIFICATION_ID) }
+        if (startId > 0) stopSelf(startId) else stopSelf()
+    }
+
+    private fun updateHostingWakeLock(enabled: Boolean) {
+        val current = hostingWakeLock
+        if (!enabled) {
+            hostingWakeLock = null
+            if (current?.isHeld == true) {
+                runCatching { current.release() }
+                runCatching { store.recordEvent(null, "server.cpu_wake_lock_released", "Screen-off hosting CPU lock released") }
+            }
+            return
+        }
+        if (current?.isHeld == true) return
+
+        try {
+            val lock = current ?: (getSystemService(Context.POWER_SERVICE) as PowerManager).newWakeLock(
+                PowerManager.PARTIAL_WAKE_LOCK,
+                "$packageName:LocalHosting",
+            )
+            lock.setReferenceCounted(false)
+            lock.acquire()
+            hostingWakeLock = lock
+            runCatching { store.recordEvent(null, "server.cpu_wake_lock_acquired", "Screen-off hosting CPU lock active") }
+        } catch (failure: Exception) {
+            hostingWakeLock = null
+            runCatching {
+                store.recordEvent(null, "server.cpu_wake_lock_failed", failure.message.orEmpty())
             }
         }
     }
