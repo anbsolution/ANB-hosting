@@ -70,7 +70,7 @@ flowchart TD
   Sync <--> Files
 ```
 
-The current Android path is the SQLite/store, file manager, foreground service, and static HTTP server. Runtime and database boxes are future work. Runtime processes must not execute arbitrary customer code with unrestricted access to ANB credentials or other sites. The design phase must prove an Android-compatible isolation boundary, process/resource limits, and safe local IPC before enabling dynamic code.
+The current Android path is the SQLite/store, file manager, foreground service, and static HTTP server. Runtime and database boxes are future work. The first runtime design is a proposal, not implemented code: the foreground supervisor owns the listener, while an Android isolated worker handles dynamic site code over a narrow IPC contract. A file broker would grant operations only within that site's root, and the worker would not receive the app's account/session data. Android documents isolated services as having no permissions of their own and communicating through the Service API; the Python package must also be proven loadable from that process. Before enabling dynamic code, demonstrate request/response streaming, path-scoped file access, process termination/recovery, and enforceable resource limits on an actual device.
 
 The existing web/cloud path remains separate: web or Android client → LAN NGINX/API → PostgreSQL and the private hosting engine → static Docker site container. This stack runs on an external Linux host; it is not the Android-local server.
 
@@ -84,18 +84,20 @@ The existing web/cloud path remains separate: web or Android client → LAN NGIN
 - Verify CPU wake-lock acquisition/release on supported Android versions and measure screen-off serving, battery use, Doze behavior, and user battery-setting changes across device vendors.
 - Keep local HTTP sharing off by default and clearly distinguish phone HTTP preview from the separate LAN host's HTTPS setup.
 
-### Phase 2 — Runtime foundation and PHP
+### Phase 2 — Runtime foundation and Python feasibility
 
-- Define a per-site runtime interface for install/version, start/stop/restart, health, logs, and resource limits.
-- Build Android ARM64 runtime artifacts in GitHub Actions; do not require Termux or fetch a third-party hosting backend at runtime.
-- Prototype PHP first behind an isolated process boundary and local IPC. Validate PHP requests and file access cannot read other sites, ANB credentials, or app-private control data.
-- Add runtime selection only after installation, lifecycle, logs, limits, upgrade, and recovery work end to end.
+- Define a per-site runtime contract for install/version, start/stop/restart, health, logs, and enforceable resource limits.
+- Prototype CPython first for `arm64-v8a`, using CPython's Android embedding build and `libpython`; Android does not provide a system Python installation or standalone Python console. Build and package the interpreter, standard library, and app code through GitHub Actions.
+- Keep the Kotlin HTTP server as the listener and route Python requests through an explicit worker IPC contract. The runtime worker must not receive ANB session credentials or unrestricted access to other sites.
+- Prove worker isolation, scoped file access, request body/response streaming, process recovery, and bounded CPU/memory/storage before adding a runtime selector or running imported Python code.
+- Add Python selection only after the packaged runtime, a real HTTP app, lifecycle, useful logs, stop/restart, and device tests pass together.
 
-### Phase 3 — Node.js and Python
+### Phase 3 — Node.js and PHP feasibility
 
-- Add packaged Android-compatible runtimes using the same lifecycle contract and isolation checks.
-- Support version selection, per-site entry points, dependency/build logs, graceful restarts, and limits.
-- Verify the exact runtime artifacts and supported Android ABIs in GitHub Actions and on devices.
+- Evaluate each runtime against the same package, IPC, isolation, storage, battery, ABI, and release-size gates before promising support.
+- Node.js documents Android as unsupported and says it has no Android testing in its current CI. PHP's installation manual says cross-compiling with the Android toolchain is currently unsupported. Treat both as downstream porting projects, not routine runtime packaging.
+- Build candidate artifacts only in GitHub Actions, run upstream/runtime smoke tests where available, and test on supported Android devices. Do not download interpreters when a site starts.
+- Expose a runtime/version only after its actual Android artifact, per-site lifecycle, logs, limits, restart behavior, and file isolation work end to end.
 
 ### Phase 4 — MySQL-compatible databases
 
@@ -130,3 +132,10 @@ The existing web/cloud path remains separate: web or Android client → LAN NGIN
 ## Release compatibility gate
 
 Before publishing an update APK, identify the signing key used by the existing installed/released app. Store it only in GitHub Actions secrets and build a signed release using that key. If no prior release key exists, create and back it up before first release. A new debug key or a different signing key will not update an app installed with the old signature.
+
+## Runtime feasibility references
+
+- CPython Android embedding and packaging: <https://docs.python.org/3.14/using/android.html> and <https://github.com/python/cpython/blob/3.14/Android/README.md>.
+- Node.js Android build/support status: <https://github.com/nodejs/node/blob/main/BUILDING.md#android>.
+- PHP Android toolchain cross-compilation status: <https://www.php.net/manual/en/install.unix.source.php>.
+- Android isolated service process model: <https://developer.android.com/guide/topics/manifest/service-element#isolated_process>.
