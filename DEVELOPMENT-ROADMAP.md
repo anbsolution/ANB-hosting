@@ -20,7 +20,7 @@ This audit describes the local `main` worktree as of 2026-11-16. The GitHub `mai
 - Android local request/error events, per-site file/storage totals, 30-day successful response payload totals, app memory/CPU samples, and free-storage samples.
 - Android public GitHub repository deployment source: select a branch, tag, or commit (or use the default), resolve it to a commit SHA, deploy to a new or stopped existing site, and roll back up to three saved file snapshots capped at 50 MiB each. ZIP and path limits are enforced; no build is run.
 - GitHub Actions source for JavaScript workspace validation and an Android debug unit-test/APK build. The Android job runs `:app:testDebugUnitTest` before `:app:assembleDebug`.
-- Optional signed Android release build source: the app version is `2` with the same `com.anbhosting.app` ID, and CI can sign only when the existing key is supplied through four GitHub secrets; no key is configured yet.
+- Optional signed Android release build source: the app version is `2` with the same `com.anbhosting.app` ID, and CI requires the existing key plus its expected certificate SHA-256 fingerprint before it will upload a release APK; no key is configured yet.
 - A Docker-based static-site engine and NGINX routing for a separate Linux host. The Docker site container has fixed CPU, memory, PID, capability, filesystem, and log limits.
 - A script for private-CA HTTPS on the Linux-hosted LAN stack. Android trusts installed user CA certificates for API connections.
 
@@ -51,7 +51,7 @@ This audit describes the local `main` worktree as of 2026-11-16. The GitHub `mai
 - Android unit tests added for static serving, path safety, file/archive operations, database migration, resource measurement, public-repository URL/ref validation, branch-to-SHA resolution, pinned archive deployment, rollback, failure cleanup, folder selection, dotfile protection, and the screen-off preference have not run in GitHub Actions for the local commits.
 - The wake-lock acquire/release lifecycle has not been exercised on a physical Android device.
 - The new `<site-slug>.localhost` Host routing and IPv4/IPv6 listener behavior have not run in Android CI; browser preview has not been verified on a physical phone.
-- Version 2, the Gradle release-signing configuration, and the optional signed-release CI step have not run in GitHub Actions. The actual release signing key remains unidentified.
+- Version 2, the Gradle release-signing configuration, certificate-fingerprint gate, and optional signed-release CI step have not run in GitHub Actions. The actual release signing key and fingerprint remain unidentified.
 - No APK has been built from the local commits after `e074683`, installed, or tested on an Android device. The available shells have no JDK or Gradle. The requirement to build Android APKs through GitHub Actions remains in force.
 - The latest observed GitHub Actions run was run 5 for remote commit `e074683`; it succeeded. That verifies the old remote revision, not any commits currently ahead of `origin/main`.
 - GitHub Actions could not be triggered for the local commits because GitHub write credentials are not configured in this workspace.
@@ -135,7 +135,7 @@ The existing web/cloud path remains separate: web or Android client → LAN NGIN
 
 ## Release compatibility gate
 
-Before publishing an update APK, identify the signing key used by the existing installed/released app. Store it only in GitHub Actions secrets and build a signed release using that key. If no prior release key exists, create and back it up before first release. A new debug key or a different signing key will not update an app installed with the old signature.
+Before publishing an update APK, identify the signing key and SHA-256 certificate fingerprint used by the existing installed/released app. Store them only in GitHub Actions secrets and build a signed release using that key. CI must compare the APK signer fingerprint with the expected fingerprint before uploading. If no prior release key exists, create and back it up before first release. A new debug key or a different signing key will not update an app installed with the old signature.
 
 ## Runtime feasibility references
 

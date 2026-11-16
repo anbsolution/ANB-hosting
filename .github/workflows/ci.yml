@@ -59,8 +59,9 @@ jobs:
           ANB_RELEASE_STORE_PASSWORD: ${{ secrets.ANB_RELEASE_STORE_PASSWORD }}
           ANB_RELEASE_KEY_ALIAS: ${{ secrets.ANB_RELEASE_KEY_ALIAS }}
           ANB_RELEASE_KEY_PASSWORD: ${{ secrets.ANB_RELEASE_KEY_PASSWORD }}
+          ANB_RELEASE_CERT_SHA256: ${{ secrets.ANB_RELEASE_CERT_SHA256 }}
         run: |
-          if [ -z "$ANB_RELEASE_KEYSTORE_BASE64" ] || [ -z "$ANB_RELEASE_STORE_PASSWORD" ] || [ -z "$ANB_RELEASE_KEY_ALIAS" ] || [ -z "$ANB_RELEASE_KEY_PASSWORD" ]; then
+          if [ -z "$ANB_RELEASE_KEYSTORE_BASE64" ] || [ -z "$ANB_RELEASE_STORE_PASSWORD" ] || [ -z "$ANB_RELEASE_KEY_ALIAS" ] || [ -z "$ANB_RELEASE_KEY_PASSWORD" ] || [ -z "$ANB_RELEASE_CERT_SHA256" ]; then
             echo "Release APK skipped: signing secrets are not configured."
             exit 0
           fi
@@ -68,6 +69,17 @@ jobs:
           chmod 600 "$RUNNER_TEMP/anb-release-key.jks"
           export ANB_RELEASE_KEYSTORE_PATH="$RUNNER_TEMP/anb-release-key.jks"
           gradle -p android :app:assembleRelease
+          APKSIGNER="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
+          if [ -z "$APKSIGNER" ]; then
+            echo "Android apksigner was not found."
+            exit 1
+          fi
+          ACTUAL_CERT_SHA256="$("$APKSIGNER" verify --print-certs android/app/build/outputs/apk/release/app-release.apk 2>/dev/null | awk '/Signer #1 certificate SHA-256 digest:/ { print $NF; exit }' | tr -d ':' | tr '[:lower:]' '[:upper:]')"
+          EXPECTED_CERT_SHA256="$(printf '%s' "$ANB_RELEASE_CERT_SHA256" | tr -d ':' | tr '[:lower:]' '[:upper:]')"
+          if [ -z "$ACTUAL_CERT_SHA256" ] || [ "$ACTUAL_CERT_SHA256" != "$EXPECTED_CERT_SHA256" ]; then
+            echo "Release certificate does not match ANB_RELEASE_CERT_SHA256."
+            exit 1
+          fi
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
