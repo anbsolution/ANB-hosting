@@ -159,6 +159,9 @@ class LocalStaticServer(private val context: Context, private val store: LocalHo
                     }
                     var headerBytes = 0
                     var hostHeader: String? = null
+                    var rangeHeader: String? = null
+                    var rangeHeaderSeen = false
+                    var duplicateRangeHeader = false
                     while (true) {
                         val line = readHttpLine(input, MAX_HEADER_LINE_BYTES)
                             ?: run {
@@ -181,6 +184,14 @@ class LocalStaticServer(private val context: Context, private val store: LocalHo
                                 return
                             }
                             hostHeader = line.substring(separator + 1).trim()
+                        }
+                        if (separator > 0 && line.substring(0, separator).equals("Range", ignoreCase = true)) {
+                            if (rangeHeaderSeen) {
+                                duplicateRangeHeader = true
+                            } else {
+                                rangeHeaderSeen = true
+                                rangeHeader = line.substring(separator + 1).trim()
+                            }
                         }
                     }
                     val requestHostname = localHostnameFromHost(hostHeader)
@@ -212,8 +223,31 @@ class LocalStaticServer(private val context: Context, private val store: LocalHo
                             responseBytes = sendError(connection, 404, "Not Found", method == "HEAD")
                         }
                         is ResolvedPath -> {
-                            responseStatus = 200
-                            responseBytes = sendFile(connection, path.file, method == "HEAD")
+                            val selectedRange = if (duplicateRangeHeader) {
+                                FullFile
+                            } else {
+                                selectRange(rangeHeader, path.file.length())
+                            }
+                            when (selectedRange) {
+                                UnsatisfiableRange -> {
+                                    responseStatus = 416
+                                    responseBytes = sendError(
+                                        connection,
+                                        416,
+                                        "Range Not Satisfiable",
+                                        method == "HEAD",
+                                        listOf("Accept-Ranges: bytes", "Content-Range: bytes */${path.file.length()}"),
+                                    )
+                                }
+                                FullFile -> {
+                                    responseStatus = 200
+                                    responseBytes = sendFile(connection, path.file, method == "HEAD")
+                                }
+                                is SelectedRange -> {
+                                    responseStatus = 206
+                                    responseBytes = sendFile(connection, path.file, method == "HEAD", selectedRange)
+                                }
+                            }
                         }
                     }
                 } catch (error: IOException) {
@@ -235,7 +269,7 @@ class LocalStaticServer(private val context: Context, private val store: LocalHo
                         val detail = "${requestMethod.ifBlank { "UNKNOWN" }} $requestPath → $status" +
                             failureMessage?.takeIf(String::isNotBlank)?.let { " (${it.take(160)})" }.orEmpty()
                         runCatching { store.recordEvent(requestSiteId, action, detail) }
-                        if (requestSiteId != null && responseStatus == 200 && responseBytes > 0) {
+                        if (requestSiteId != null && responseStatus in 200..206 && responseBytes > 0) {
                             runCatching { store.recordTraffic(requestSiteId!!, responseBytes) }
                         }
                     }
@@ -319,7 +353,7 @@ class LocalStaticServer(private val context: Context, private val store: LocalHo
         null
     }
 
-    private fun sendFile(socket: Socket, file: File, headOnly: Boolean): Long {
+    private fun sendFile(socket: Socket, file: File, headOnly: Boolean, range: SelectedRange? = null): Long {
         val mime = when (file.extension.lowercase()) {
             "html", "htm" -> "text/html; charset=utf-8"
             "css" -> "text/css; charset=utf-8"
@@ -340,16 +374,39 @@ class LocalStaticServer(private val context: Context, private val store: LocalHo
             else -> URLConnection.guessContentTypeFromName(file.name) ?: "application/octet-stream"
         }
         val output = BufferedOutputStream(socket.getOutputStream())
-        writeHeaders(output, 200, "OK", mime, file.length())
-        val bytesSent = if (!headOnly) FileInputStream(file).use { it.copyTo(output) } else 0L
+        val fileLength = file.length()
+        val start = range?.start ?: 0L
+        val end = range?.end ?: (fileLength - 1)
+        val contentLength = if (fileLength == 0L) 0L else end - start + 1
+        val status = if (range == null) 200 else 206
+        val reason = if (range == null) "OK" else "Partial Content"
+        val responseHeaders = buildList {
+            add("Accept-Ranges: bytes")
+            if (range != null) add("Content-Range: bytes $start-$end/$fileLength")
+        }
+        writeHeaders(output, status, reason, mime, contentLength, responseHeaders)
+        val bytesSent = if (!headOnly && contentLength > 0) {
+            FileInputStream(file).use { input ->
+                if (start > 0) input.channel.position(start)
+                copyAtMost(input, output, contentLength)
+            }
+        } else {
+            0L
+        }
         output.flush()
         return bytesSent
     }
 
-    private fun sendError(socket: Socket, status: Int, message: String, headOnly: Boolean = false): Long {
+    private fun sendError(
+        socket: Socket,
+        status: Int,
+        message: String,
+        headOnly: Boolean = false,
+        responseHeaders: List<String> = emptyList(),
+    ): Long {
         val body = "<h1>$status $message</h1>".toByteArray(Charsets.UTF_8)
         val output = BufferedOutputStream(socket.getOutputStream())
-        writeHeaders(output, status, message, "text/html; charset=utf-8", body.size.toLong())
+        writeHeaders(output, status, message, "text/html; charset=utf-8", body.size.toLong(), responseHeaders)
         if (!headOnly) output.write(body)
         output.flush()
         return if (headOnly) 0L else body.size.toLong()
@@ -361,14 +418,53 @@ class LocalStaticServer(private val context: Context, private val store: LocalHo
         reason: String,
         contentType: String,
         contentLength: Long,
+        additionalHeaders: List<String> = emptyList(),
     ) {
         val headers = "HTTP/1.1 $status $reason\r\n" +
             "Content-Type: $contentType\r\n" +
             "Content-Length: $contentLength\r\n" +
+            additionalHeaders.joinToString(separator = "", postfix = if (additionalHeaders.isEmpty()) "" else "\r\n") {
+                "$it\r\n"
+            } +
             "Connection: close\r\n" +
             "Cache-Control: no-cache\r\n" +
             "X-Content-Type-Options: nosniff\r\n\r\n"
         output.write(headers.toByteArray(Charset.forName("ISO-8859-1")))
+    }
+
+    private fun copyAtMost(input: java.io.InputStream, output: BufferedOutputStream, maxBytes: Long): Long {
+        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+        var copied = 0L
+        while (copied < maxBytes) {
+            val count = input.read(buffer, 0, minOf(buffer.size.toLong(), maxBytes - copied).toInt())
+            if (count < 0) break
+            output.write(buffer, 0, count)
+            copied += count
+        }
+        return copied
+    }
+
+    private fun selectRange(value: String?, fileLength: Long): ByteRangeResult {
+        val requested = value?.trim()?.let(BYTE_RANGE_PATTERN::matchEntire) ?: return FullFile
+        val first = requested.groupValues[1]
+        val last = requested.groupValues[2]
+        if (first.isEmpty() && last.isEmpty()) return FullFile
+
+        if (first.isEmpty()) {
+            val suffixLength = last.toLongOrNull() ?: return FullFile
+            if (suffixLength <= 0 || fileLength <= 0) return UnsatisfiableRange
+            return SelectedRange((fileLength - suffixLength).coerceAtLeast(0), fileLength - 1)
+        }
+
+        val start = first.toLongOrNull() ?: return FullFile
+        if (start >= fileLength) return UnsatisfiableRange
+        val requestedEnd = if (last.isEmpty()) {
+            fileLength - 1
+        } else {
+            last.toLongOrNull() ?: return FullFile
+        }
+        if (requestedEnd < start) return FullFile
+        return SelectedRange(start, minOf(requestedEnd, fileLength - 1))
     }
 
     private fun readHttpLine(input: java.io.InputStream, maxBytes: Int): String? {
@@ -387,6 +483,11 @@ class LocalStaticServer(private val context: Context, private val store: LocalHo
     private data object ForbiddenPath : PathResult
     private data object MissingPath : PathResult
 
+    private sealed interface ByteRangeResult
+    private data object FullFile : ByteRangeResult
+    private data object UnsatisfiableRange : ByteRangeResult
+    private data class SelectedRange(val start: Long, val end: Long) : ByteRangeResult
+
     companion object {
         const val PORT = 8787
         private const val MAX_CLIENTS = 4
@@ -398,5 +499,6 @@ class LocalStaticServer(private val context: Context, private val store: LocalHo
         private const val MAX_LOG_PATH_CHARS = 200
         private const val MAX_LOG_METHOD_CHARS = 10
         private val LOCAL_HOST_LABEL = Regex("[a-z0-9](?:[a-z0-9-]{0,58}[a-z0-9])?")
+        private val BYTE_RANGE_PATTERN = Regex("^bytes=(\\d*)-(\\d*)$", RegexOption.IGNORE_CASE)
     }
 }

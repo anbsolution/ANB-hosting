@@ -55,6 +55,58 @@ class LocalStaticServerTest {
     }
 
     @Test
+    fun servesBoundedAndSuffixByteRangesAndCountsOnlyTransferredBytes() {
+        val site = store.createSite("Ranged media")
+        site.root.resolve("media.bin").writeText("0123456789")
+        store.setSiteStatus(site.id, LocalHostingStore.STATUS_ACTIVE)
+        server = LocalStaticServer(context, store).also { it.start(allowLan = false) }
+
+        val bounded = request("/s/${site.slug}/media.bin", range = "bytes=2-5")
+        val suffix = request("/s/${site.slug}/media.bin", range = "bytes=-3")
+        val openEnded = request("/s/${site.slug}/media.bin", range = "bytes=7-")
+
+        assertTrue(bounded.startsWith("HTTP/1.1 206 Partial Content"))
+        assertTrue(bounded.contains("Content-Range: bytes 2-5/10\r\n"))
+        assertTrue(bounded.contains("Accept-Ranges: bytes\r\n"))
+        assertEquals("2345", bounded.substringAfter("\r\n\r\n"))
+        assertEquals("789", suffix.substringAfter("\r\n\r\n"))
+        assertEquals("789", openEnded.substringAfter("\r\n\r\n"))
+        assertEquals(10L, store.trafficLast30Days(site.id))
+    }
+
+    @Test
+    fun rangeHeadHasPartialHeadersWithoutBodyAndUnsatisfiableRangeReturns416() {
+        val site = store.createSite("Range metadata")
+        site.root.resolve("media.bin").writeText("abcdef")
+        store.setSiteStatus(site.id, LocalHostingStore.STATUS_ACTIVE)
+        server = LocalStaticServer(context, store).also { it.start(allowLan = false) }
+
+        val head = request("/s/${site.slug}/media.bin", method = "HEAD", range = "bytes=1-3")
+        val unsatisfiable = request("/s/${site.slug}/media.bin", range = "bytes=6-")
+
+        assertTrue(head.startsWith("HTTP/1.1 206 Partial Content"))
+        assertTrue(head.contains("Content-Length: 3\r\n"))
+        assertTrue(head.contains("Content-Range: bytes 1-3/6\r\n"))
+        assertTrue(head.substringAfter("\r\n\r\n").isEmpty())
+        assertTrue(unsatisfiable.startsWith("HTTP/1.1 416 Range Not Satisfiable"))
+        assertTrue(unsatisfiable.contains("Content-Range: bytes */6\r\n"))
+        assertEquals(0L, store.trafficLast30Days(site.id))
+    }
+
+    @Test
+    fun malformedAndMultipleRangesFallBackToTheFullFile() {
+        val site = store.createSite("Invalid range")
+        site.root.resolve("media.bin").writeText("abcdef")
+        store.setSiteStatus(site.id, LocalHostingStore.STATUS_ACTIVE)
+        server = LocalStaticServer(context, store).also { it.start(allowLan = false) }
+
+        val response = request("/s/${site.slug}/media.bin", range = "bytes=0-1,4-5")
+
+        assertTrue(response.startsWith("HTTP/1.1 200 OK"))
+        assertEquals("abcdef", response.substringAfter("\r\n\r\n"))
+    }
+
+    @Test
     fun servesActiveSiteFromItsPhoneLocalSubdomain() {
         val site = store.createSite("Offline subdomain")
         site.root.resolve("about").mkdirs()
@@ -191,10 +243,11 @@ class LocalStaticServerTest {
         method: String = "GET",
         host: String = "127.0.0.1",
         address: String = "127.0.0.1",
+        range: String? = null,
     ): String = Socket(address, LocalStaticServer.PORT).use { socket ->
         socket.soTimeout = 5_000
         socket.getOutputStream().write(
-            "$method $path HTTP/1.1\r\nHost: $host\r\nConnection: close\r\n\r\n".toByteArray(),
+            "$method $path HTTP/1.1\r\nHost: $host\r\n${range?.let { "Range: $it\r\n" }.orEmpty()}Connection: close\r\n\r\n".toByteArray(),
         )
         socket.getOutputStream().flush()
         socket.getInputStream().readBytes().toString(Charsets.UTF_8)
