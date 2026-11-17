@@ -130,27 +130,27 @@ class LocalHostingService : Service() {
 
     private fun reconfigureForWifiChange() {
         if (!::store.isInitialized || !store.isLanSharingEnabled()) return
-        runCatching {
+        try {
             executor.execute {
-                val activeSites = store.listSites().filter { it.status == LocalHostingStore.STATUS_ACTIVE }
-                if (activeSites.isEmpty()) {
-                    stopLocalHosting()
-                    stopSelf()
-                    return@execute
-                }
-                stopLocalHosting()
-                updateHostingWakeLock(store.isKeepCpuAwakeEnabled())
                 try {
+                    val activeSites = store.listSites().filter { it.status == LocalHostingStore.STATUS_ACTIVE }
+                    if (activeSites.isEmpty()) {
+                        stopLocalHosting()
+                        stopSelf()
+                        return@execute
+                    }
+                    stopLocalHosting()
+                    updateHostingWakeLock(store.isKeepCpuAwakeEnabled())
                     server = LocalStaticServer(this, store).also { it.start(true) }
                     serverRunning = true
                     (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
                         .notify(NOTIFICATION_ID, buildNotification())
                 } catch (error: Exception) {
-                    failHosting(0, "server.network_rebind_failed", error, activeSites)
+                    failHosting(0, "server.network_rebind_failed", error)
                 }
-            } catch (error: Exception) {
-                failHosting(0, "server.network_rebind_failed", error)
             }
+        } catch (error: Exception) {
+            failHosting(0, "server.network_rebind_failed", error)
         }
     }
 

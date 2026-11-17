@@ -24,8 +24,6 @@ jobs:
   cpython-android-smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 120
-    env:
-      CROSS_BUILD_DIR: ${{ runner.temp }}/anb-cpython-cross-build
     steps:
       - name: Check out ANB Hosting
         uses: actions/checkout@v4
@@ -75,6 +73,7 @@ jobs:
       - name: Download and verify official CPython Android packages
         shell: bash
         run: |
+          CROSS_BUILD_DIR="$RUNNER_TEMP/anb-cpython-cross-build"
           mkdir -p "$CROSS_BUILD_DIR/aarch64-linux-android" "$CROSS_BUILD_DIR/x86_64-linux-android"
           curl --fail --location --retry 3 --output "$RUNNER_TEMP/python-3.14.10-aarch64-linux-android.tar.gz" \
             https://www.python.org/ftp/python/3.14.10/python-3.14.10-aarch64-linux-android.tar.gz
