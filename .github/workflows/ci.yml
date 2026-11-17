@@ -67,16 +67,9 @@ jobs:
           target: google_apis
           arch: x86_64
           disable-animations: true
-          script: |
-            adb logcat -c
-            if gradle -p android :app:connectedDebugAndroidTest; then
-              exit 0
-            else
-              android_test_exit_code=$?
-              echo "Android instrumentation failed; emulator crash and system logs follow."
-              adb logcat -d -b crash -b system -b main -v threadtime | tail -n 2000
-              exit "$android_test_exit_code"
-            fi
+          script: >-
+            adb logcat -c && gradle -p android :app:connectedDebugAndroidTest ||
+            { android_test_exit_code=$?; echo "Android instrumentation failed; emulator crash and system logs follow."; adb logcat -d -b crash -b system -b main -v threadtime | tail -n 2000; exit "$android_test_exit_code"; }
       - name: Build signed Android release APK when the existing key is configured
         env:
           ANB_RELEASE_KEYSTORE_BASE64: ${{ secrets.ANB_RELEASE_KEYSTORE_BASE64 }}
