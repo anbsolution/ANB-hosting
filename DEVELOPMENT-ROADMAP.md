@@ -19,6 +19,7 @@ This audit describes the Android hosting work on `main` as of 2026-11-17. CI run
 - Android local-domain source: each site can register and remove additional `.localhost` aliases in SQLite; the Host router resolves those aliases to the selected site's files, and the local dashboard exposes alias management and preview.
 - Configurable Android partial CPU wake lock while active sites run, with an in-app battery setting and a shortcut to Android app battery settings.
 - Android local website management source: SAF file import/export, delete/rename, small text-file editing, ZIP extraction, and ZIP backup/restore.
+- Android per-website SQLite manager source: create/list/delete, a restricted single-statement SQL workbench, and bounded database import/export. Database files live in private app storage outside each served website root.
 - Android local request/error events, per-site file/storage totals, 30-day successful response payload totals, app memory/CPU samples, and free-storage samples. A dedicated per-site HTTP log view is implemented with status/error filters, search, paging, 24-hour request/error counts, CSV export, and a 2,000-request retention cap; Android unit tests, debug APK build, and emulator instrumentation passed in CI run `44041629231`.
 - Android public GitHub repository deployment source: select a branch, tag, or commit (or use the default), resolve it to a commit SHA, deploy to a new or stopped existing site, and roll back up to three saved file snapshots capped at 50 MiB each. ZIP and path limits are enforced; no build is run.
 - GitHub Actions source for JavaScript workspace validation and an Android debug unit-test/APK build. The Android job runs `:app:testDebugUnitTest` before `:app:assembleDebug`.
@@ -35,10 +36,10 @@ This audit describes the Android hosting work on `main` as of 2026-11-17. CI run
 - **Website management:** file operations are local to Android app-private sites. The Docker-hosted website API still has no customer file upload, editor, archive, backup, or restore endpoints.
 - **Roles and workspaces:** tenant isolation and an initial admin/user role foundation exist; there is no complete member invitation, role-management, or account administration workflow.
 - **Domains and SSL:** the Android phone-local `<site-slug>.localhost` hostname and extra `.localhost` alias management are source-implemented for offline preview. The Android resolver returned both `::1` and `127.0.0.1`, and a loopback HTTP request to a temporary test server succeeded through the default hostname. These reserved aliases resolve to the current phone and are not reachable from other devices as those same names. The Prisma `Domain` model and Linux local-CA setup exist, but there is no Android custom-domain API, DNS ownership verification, registrar/provider integration, TLS on the phone, public certificate issuance, or automatic renewal.
-- **Database support:** PostgreSQL stores ANB control-plane data. It is not a customer database feature and there is no MySQL-compatible server, per-site database/user management, import/export, or backup workflow.
+- **Database support:** PostgreSQL stores ANB control-plane data. Android now has a separate per-site SQLite manager with create/delete, bounded SQL, and import/export. It does not provide MySQL compatibility, database users/passwords, quotas, or a shared runtime connection for hosted code.
 - **Monitoring and limits:** Android now has local app/storage measurements, site request totals, and a dedicated per-site request/error history. It does not enforce per-site CPU/RAM/storage quotas. The Docker engine has container limits, but dashboard storage/bandwidth metrics are not wired to measured production data.
 - **GitHub deployment:** public prebuilt static-folder deployment with branch/tag selection, commit-SHA pinning, stopped-site updates, and a three-snapshot local rollback history (50 MiB per backup) is implemented in source. Private-repository authorization, source builds, and cloud deployment history remain missing.
-- **Dashboard parity:** the web dashboard and Android app provide the existing account/website workflows. Android does not yet have complete domains, databases, email, deployment, or hosting-plan modules; the UI is not yet a finished premium hosting console.
+- **Dashboard parity:** the web dashboard and Android app provide the existing account/website workflows. Android still lacks complete domains, MySQL database, email, and hosting-plan modules; the UI is not yet a finished premium hosting console.
 - **APK updates:** the application ID is stable and an optional signed release path is source-configured, but the repository has no stable release/upload key configured. CI currently produces only debug APKs; package ID alone does not make separately signed APKs update-compatible.
 - **Python runtime:** source packages CPython 3.14.10 arm64 and x86_64, extracts its standard library, and passes an x86_64 emulator smoke test importing all 53 packaged production native extensions. Android app installs retain 32-bit ABI libraries without Python support. This code does not execute website code or provide a website runtime selector.
 
@@ -61,6 +62,7 @@ This audit describes the Android hosting work on `main` as of 2026-11-17. CI run
 - No APK has been installed or tested on a physical Android device. CI builds a debug APK; it does not produce a signed release without the existing signing secrets.
 - The 32-bit app ABI placeholder libraries have not been installed on a 32-bit Android device.
 - Android local domain alias, file-management, and byte-range features have CI unit-test coverage, but have not been reviewed on a physical phone.
+- The local SQLite database screen and its Android file-picker interactions have not been reviewed on a physical phone.
 - Per-site request-log migration, filtering, retention, CSV safety, and dashboard UI passed CI run `44041629231`; the screen has not been visually reviewed on a physical phone.
 - No full Docker Compose, NGINX, DNS, ACME, private-repository GitHub deployment, or live multi-device hosting test was performed in this audit.
 - The monorepo lint, formatting, typecheck, and JavaScript test commands passed locally. API tests: 2 passed; hosting-engine tests: 2 passed. `npm run build` could not finish on Android because Next.js requested a nonexistent `@next/swc-android-arm64` binary. This device limitation is not an Android CI build result.
@@ -71,6 +73,8 @@ This audit describes the Android hosting work on `main` as of 2026-11-17. CI run
 flowchart TD
   UI[Compose hosting dashboard] --> Store[SQLite metadata, events, traffic]
   UI --> Files[App-private site storage and file manager]
+  UI --> LocalDB[Per-site private SQLite manager and SQL workbench]
+  LocalDB --> DBFiles[App-private database files outside website roots]
   Service[Android foreground hosting service] --> HTTP[Local static HTTP server]
   HTTP --> Files
   HTTP --> Runtime[Future runtime supervisor]
@@ -81,7 +85,7 @@ flowchart TD
   Sync <--> Files
 ```
 
-The current Android path is the SQLite/store, file manager, foreground service, and static HTTP server. Runtime and database boxes are future work. The foreground supervisor will own the listener while an Android isolated worker handles dynamic site code over a narrow IPC contract. The worker AIDL currently exposes only an isolation probe; it is not yet connected to CPython or HTTP. The app must pass explicit file descriptors for the selected site's root and runtime files; the worker must not receive account/session data. The instrumentation source uses separate isolated service instances per site on API 29 and later; Android 8/9 static hosting remains available without per-site workers. These paths are not yet tested. Before enabling dynamic code, demonstrate descriptor-scoped reads, sibling-site and app-private denial, CPython loading from the worker, HTTP body/response streaming, process recovery, and bounded CPU/memory/storage on devices.
+The current Android path is the SQLite metadata store, per-site local SQLite manager, file manager, foreground service, and static HTTP server. MySQL-compatible hosting and dynamic runtime execution remain future work. The foreground supervisor will own the listener while an Android isolated worker handles dynamic site code over a narrow IPC contract. The worker AIDL currently exposes only an isolation probe; it is not yet connected to CPython or HTTP. The app must pass explicit file descriptors for the selected site's root and runtime files; the worker must not receive account/session data. The instrumentation source uses separate isolated service instances per site on API 29 and later; Android 8/9 static hosting remains available without per-site workers. These paths are not yet tested. Before enabling dynamic code, demonstrate descriptor-scoped reads, sibling-site and app-private denial, CPython loading from the worker, HTTP body/response streaming, process recovery, and bounded CPU/memory/storage on devices.
 
 The existing web/cloud path remains separate: web or Android client → LAN NGINX/API → PostgreSQL and the private hosting engine → static Docker site container. This stack runs on an external Linux host; it is not the Android-local server.
 
@@ -113,7 +117,7 @@ The existing web/cloud path remains separate: web or Android client → LAN NGIN
 ### Phase 4 — MySQL-compatible databases
 
 - Prove a bundled Android-compatible MySQL/MariaDB server can run within phone storage, RAM, CPU, and battery limits.
-- Keep database sockets private to the phone; add per-site database/user creation, credential rotation, import/export, backup/restore, quotas, and logs.
+- Build on the local SQLite manager, which is isolated from served website files and currently supports manual SQL plus database import/export. Add a MySQL-compatible server, hosted-code connections, per-site database/user credentials, quotas, and logs only after the server is proven on Android.
 - If a safe, maintainable Android server cannot be shipped, expose the limitation instead of labeling SQLite as MySQL.
 
 ### Phase 5 — GitHub deployment and build history

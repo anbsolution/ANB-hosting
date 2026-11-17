@@ -83,6 +83,9 @@ internal fun LocalHostingScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val fileManager = remember(store) { LocalFileManager(store) }
+    val databaseManager = remember(context.applicationContext, store) {
+        LocalDatabaseManager(context.applicationContext, store)
+    }
     val githubDeployer = remember(context.applicationContext, store, fileManager) {
         LocalGithubDeployer(context.applicationContext, store, fileManager)
     }
@@ -115,10 +118,14 @@ internal fun LocalHostingScreen(
     var busy by remember { mutableStateOf(false) }
     var phoneAddress by remember { mutableStateOf(LocalNetwork.wifiIpv4Address(context)?.hostAddress) }
     var managedSite by remember { mutableStateOf<LocalSite?>(null) }
+    var databaseSite by remember { mutableStateOf<LocalSite?>(null) }
     var logsSite by remember { mutableStateOf<LocalSite?>(null) }
     var previewUrl by remember { mutableStateOf<String?>(null) }
 
-    BackHandler(enabled = managedSite == null && logsSite == null && previewUrl == null, onBack = onBack)
+    BackHandler(
+        enabled = managedSite == null && databaseSite == null && logsSite == null && previewUrl == null,
+        onBack = onBack,
+    )
 
     fun reload() {
         scope.launch {
@@ -230,11 +237,13 @@ internal fun LocalHostingScreen(
                     if (site.status == LocalHostingStore.STATUS_ACTIVE) {
                         store.setSiteStatus(site.id, LocalHostingStore.STATUS_STOPPED)
                     }
+                    databaseManager.deleteAllForSite(site.id)
                     store.deleteSite(site.id)
                     store.listSites().any { it.status == LocalHostingStore.STATUS_ACTIVE }
                 }
                 if (!remaining) onStopHosting()
                 if (localDomainSite?.id == site.id) localDomainSite = null
+                if (databaseSite?.id == site.id) databaseSite = null
                 pendingDelete = null
                 reload()
             } catch (failure: Exception) {
@@ -336,6 +345,12 @@ internal fun LocalHostingScreen(
                     manager = fileManager,
                     site = selectedSite,
                     onBack = { managedSite = null; reload() },
+                )
+            } else if (databaseSite != null) {
+                LocalDatabaseManagerScreen(
+                    manager = databaseManager,
+                    site = requireNotNull(databaseSite),
+                    onBack = { databaseSite = null; reload() },
                 )
             } else if (logsSite != null) {
                 LocalWebsiteLogsScreen(
@@ -551,7 +566,10 @@ internal fun LocalHostingScreen(
                                 }
                                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                     OutlinedButton(onClick = { managedSite = site }, enabled = !busy, shape = RoundedCornerShape(14.dp)) { Text("Files") }
+                                    OutlinedButton(onClick = { databaseSite = site }, enabled = !busy, shape = RoundedCornerShape(14.dp)) { Text("Database") }
                                     OutlinedButton(onClick = { logsSite = site }, enabled = !busy, shape = RoundedCornerShape(14.dp)) { Text("Logs") }
+                                }
+                                Row {
                                     TextButton(onClick = { pendingDelete = site }, enabled = !busy) {
                                         Text("Delete website", color = Color(0xFFB42318))
                                     }
