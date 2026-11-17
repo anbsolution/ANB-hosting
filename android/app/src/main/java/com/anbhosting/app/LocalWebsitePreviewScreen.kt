@@ -145,7 +145,7 @@ internal fun LocalWebsitePreviewScreen(
 
             if (progress in 1..99 && loadError == null) {
                 LinearProgressIndicator(
-                    progress = progress / 100f,
+                    progress = { progress / 100f },
                     modifier = Modifier.fillMaxWidth(),
                 )
             }
