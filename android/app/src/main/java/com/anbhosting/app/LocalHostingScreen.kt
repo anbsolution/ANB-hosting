@@ -116,8 +116,9 @@ internal fun LocalHostingScreen(
     var phoneAddress by remember { mutableStateOf(LocalNetwork.wifiIpv4Address(context)?.hostAddress) }
     var managedSite by remember { mutableStateOf<LocalSite?>(null) }
     var logsSite by remember { mutableStateOf<LocalSite?>(null) }
+    var previewUrl by remember { mutableStateOf<String?>(null) }
 
-    BackHandler(enabled = managedSite == null && logsSite == null, onBack = onBack)
+    BackHandler(enabled = managedSite == null && logsSite == null && previewUrl == null, onBack = onBack)
 
     fun reload() {
         scope.launch {
@@ -342,6 +343,12 @@ internal fun LocalHostingScreen(
                     site = requireNotNull(logsSite),
                     onBack = { logsSite = null; reload() },
                 )
+            } else if (previewUrl != null) {
+                LocalWebsitePreviewScreen(
+                    url = requireNotNull(previewUrl),
+                    onBack = { previewUrl = null; reload() },
+                    onOpenBrowser = onOpenPreview,
+                )
             } else Column(Modifier.fillMaxSize()) {
                 LocalHeroHeader(
                     eyebrow = "ANB HOSTING · ON DEVICE",
@@ -531,7 +538,9 @@ internal fun LocalHostingScreen(
                                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                     if (site.status == LocalHostingStore.STATUS_ACTIVE) {
                                         OutlinedButton(
-                                            onClick = { onOpenPreview(siteUrl) },
+                                            onClick = {
+                                                previewUrl = "http://${site.localHostname}:${LocalStaticServer.PORT}/"
+                                            },
                                             enabled = !busy,
                                             shape = RoundedCornerShape(14.dp),
                                         ) { Text("Preview") }
@@ -771,7 +780,10 @@ internal fun LocalHostingScreen(
                                 enabled = !busy,
                             ) { Text("Remove", color = Color(0xFFB42318)) }
                             TextButton(
-                                onClick = { onOpenPreview("http://${alias.hostname}:${LocalStaticServer.PORT}/") },
+                                onClick = {
+                                    localDomainSite = null
+                                    previewUrl = "http://${alias.hostname}:${LocalStaticServer.PORT}/"
+                                },
                                 enabled = !busy && site.status == LocalHostingStore.STATUS_ACTIVE,
                             ) { Text("Open") }
                         }
