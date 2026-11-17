@@ -52,14 +52,39 @@ object BundledPythonRuntime {
         installBundledRuntime(context).absolutePath,
     )
 
-    /** Opens the installed prefix so Android can grant only this directory to an isolated worker. */
-    fun openRuntimePrefix(context: Context): ParcelFileDescriptor = ParcelFileDescriptor.open(
-        installBundledRuntime(context),
-        ParcelFileDescriptor.MODE_READ_ONLY,
-    )
+    /**
+     * Opens the pure-Python archive as one read-only file. Android's isolated
+     * UID can read the granted descriptor without traversing app-private paths.
+     */
+    fun openRuntimeArchive(context: Context): ParcelFileDescriptor = synchronized(lock) {
+        val abi = Build.SUPPORTED_ABIS.firstOrNull { it == "arm64-v8a" || it == "x86_64" }
+            ?: error("This ANB build does not include a CPython package for this device ABI")
+        val runtimeParent = File(context.noBackupFilesDir, "python-runtime/$VERSION")
+        val archive = File(runtimeParent, "$abi/python-stdlib.zip")
+        if (!archive.isFile || archive.length() == 0L) {
+            val staging = File(runtimeParent, "$abi/python-stdlib.staging")
+            staging.delete()
+            staging.parentFile?.let { parent ->
+                check(parent.mkdirs() || parent.isDirectory) { "Could not prepare the CPython archive directory" }
+            }
+            try {
+                context.assets.open("$ASSET_ROOT/$abi/python-stdlib.zip").use { input ->
+                    staging.outputStream().use { output -> input.copyTo(output) }
+                }
+                check(staging.length() > 0L) { "The bundled CPython standard library archive is empty" }
+                check(staging.renameTo(archive)) { "Could not install the CPython standard library archive" }
+            } catch (error: Exception) {
+                staging.delete()
+                throw error
+            }
+        }
+        val isolatedArchiveFd = nativeCreateIsolatedRuntimeArchive(archive.absolutePath)
+        check(isolatedArchiveFd >= 0) { "Could not prepare the isolated CPython archive" }
+        ParcelFileDescriptor.adoptFd(isolatedArchiveFd)
+    }
 
-    internal fun initializeIsolatedRuntime(runtimePrefixFd: Int): String =
-        nativeInitializeIsolatedRuntime(runtimePrefixFd)
+    internal fun initializeIsolatedRuntime(runtimeArchiveFd: Int): String =
+        nativeInitializeIsolatedRuntime(runtimeArchiveFd)
 
     internal fun runIsolatedHandler(source: String, requestJson: String): String =
         nativeRunIsolatedHandler(source, requestJson)
@@ -103,7 +128,9 @@ object BundledPythonRuntime {
 
     private external fun nativeSmokeTest(runtimeHome: String): String
 
-    private external fun nativeInitializeIsolatedRuntime(runtimePrefixFd: Int): String
+    private external fun nativeCreateIsolatedRuntimeArchive(archivePath: String): Int
+
+    private external fun nativeInitializeIsolatedRuntime(runtimeArchiveFd: Int): String
 
     private external fun nativeRunIsolatedHandler(source: String, requestJson: String): String
 }

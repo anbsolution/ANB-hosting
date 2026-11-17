@@ -3,17 +3,24 @@
 
 #include <cstring>
 #include <cstdio>
+#include <algorithm>
 #include <mutex>
+#include <cerrno>
+#include <sys/stat.h>
+#include <sys/syscall.h>
 
 #include <fcntl.h>
+#include <linux/memfd.h>
 #include <unistd.h>
 
 namespace {
 
 std::mutex runtime_mutex;
+int runtime_archive_memfd = -1;
 constexpr Py_ssize_t kMaximumSourceBytes = 256 * 1024;
 constexpr Py_ssize_t kMaximumRequestBytes = 64 * 1024;
 constexpr Py_ssize_t kMaximumResponseBytes = 256 * 1024;
+constexpr off_t kMaximumStandardLibraryArchiveBytes = 64 * 1024 * 1024;
 
 void throw_runtime_exception(JNIEnv *environment, const char *message) {
     jclass exception_class = environment->FindClass("java/lang/RuntimeException");
@@ -87,6 +94,62 @@ jstring java_ascii_string(JNIEnv *environment, PyObject *value) {
         if (static_cast<unsigned char>(utf8[index]) > 0x7f) return nullptr;
     }
     return environment->NewStringUTF(utf8);
+}
+
+int copy_archive_to_memfd(int source_fd) {
+    struct stat file_status {};
+    if (fstat(source_fd, &file_status) != 0 || !S_ISREG(file_status.st_mode) ||
+        file_status.st_size <= 0 || file_status.st_size > kMaximumStandardLibraryArchiveBytes) {
+        return -1;
+    }
+
+    const int destination_fd = static_cast<int>(syscall(
+        __NR_memfd_create,
+        "anb-python-stdlib",
+        MFD_CLOEXEC | MFD_ALLOW_SEALING
+    ));
+    if (destination_fd < 0) return -1;
+
+    char buffer[64 * 1024];
+    off_t offset = 0;
+    while (offset < file_status.st_size) {
+        const size_t requested = static_cast<size_t>(
+            std::min<off_t>(sizeof(buffer), file_status.st_size - offset)
+        );
+        ssize_t read_count;
+        do {
+            read_count = pread(source_fd, buffer, requested, offset);
+        } while (read_count < 0 && errno == EINTR);
+        if (read_count <= 0) {
+            close(destination_fd);
+            return -1;
+        }
+
+        ssize_t written = 0;
+        while (written < read_count) {
+            ssize_t write_count;
+            do {
+                write_count = write(
+                    destination_fd,
+                    buffer + written,
+                    static_cast<size_t>(read_count - written)
+                );
+            } while (write_count < 0 && errno == EINTR);
+            if (write_count <= 0) {
+                close(destination_fd);
+                return -1;
+            }
+            written += write_count;
+        }
+        offset += read_count;
+    }
+
+    if (lseek(destination_fd, 0, SEEK_SET) < 0 ||
+        fcntl(destination_fd, F_ADD_SEALS, F_SEAL_SEAL | F_SEAL_SHRINK | F_SEAL_GROW | F_SEAL_WRITE) != 0) {
+        close(destination_fd);
+        return -1;
+    }
+    return destination_fd;
 }
 
 }  // namespace
@@ -164,60 +227,82 @@ Java_com_anbhosting_app_BundledPythonRuntime_nativeSmokeTest(
     return environment->NewStringUTF(Py_GetVersion());
 }
 
+extern "C" JNIEXPORT jint JNICALL
+Java_com_anbhosting_app_BundledPythonRuntime_nativeCreateIsolatedRuntimeArchive(
+    JNIEnv *environment,
+    jobject /* receiver */,
+    jstring archive_path_value
+) {
+    if (archive_path_value == nullptr) {
+        throw_runtime_exception(environment, "The isolated CPython archive path is missing");
+        return -1;
+    }
+
+    const char *archive_path = environment->GetStringUTFChars(archive_path_value, nullptr);
+    if (archive_path == nullptr) return -1;
+    const int source_fd = open(archive_path, O_RDONLY | O_CLOEXEC);
+    environment->ReleaseStringUTFChars(archive_path_value, archive_path);
+    if (source_fd < 0) {
+        throw_runtime_exception(environment, "The bundled CPython archive could not be opened");
+        return -1;
+    }
+
+    const int isolated_fd = copy_archive_to_memfd(source_fd);
+    close(source_fd);
+    if (isolated_fd < 0) {
+        throw_runtime_exception(environment, "The bundled CPython archive could not be copied into an anonymous descriptor");
+        return -1;
+    }
+    return isolated_fd;
+}
+
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_anbhosting_app_BundledPythonRuntime_nativeInitializeIsolatedRuntime(
     JNIEnv *environment,
     jobject /* receiver */,
-    jint runtime_prefix_fd
+    jint runtime_archive_fd
 ) {
     std::lock_guard<std::mutex> lock(runtime_mutex);
     if (Py_IsInitialized()) {
         throw_runtime_exception(environment, "The isolated CPython worker is already initialized");
         return nullptr;
     }
-    if (runtime_prefix_fd < 0 || fcntl(runtime_prefix_fd, F_GETFD) == -1) {
-        throw_runtime_exception(environment, "The isolated CPython prefix file descriptor is invalid");
+    if (runtime_archive_fd < 0 || fcntl(runtime_archive_fd, F_GETFD) == -1) {
+        throw_runtime_exception(environment, "The isolated CPython archive file descriptor is invalid");
         return nullptr;
     }
 
-    char prefix_path[64];
-    char standard_library_path[128];
-    char native_library_path[160];
-    const int path_length = std::snprintf(
-        prefix_path,
-        sizeof(prefix_path),
-        "/proc/self/fd/%d",
-        runtime_prefix_fd
-    );
-    if (path_length <= 0 || static_cast<size_t>(path_length) >= sizeof(prefix_path)) {
-        throw_runtime_exception(environment, "The isolated CPython prefix path is invalid");
+    struct stat archive_status {};
+    if (fstat(runtime_archive_fd, &archive_status) != 0 || !S_ISREG(archive_status.st_mode) ||
+        archive_status.st_size <= 0 || archive_status.st_size > kMaximumStandardLibraryArchiveBytes) {
+        throw_runtime_exception(environment, "The granted CPython archive has an invalid file type or size");
         return nullptr;
     }
-    const int standard_library_length = std::snprintf(
+    runtime_archive_memfd = fcntl(runtime_archive_fd, F_DUPFD_CLOEXEC, 0);
+    if (runtime_archive_memfd < 0) {
+        throw_runtime_exception(environment, "The isolated worker could not retain the granted CPython archive");
+        return nullptr;
+    }
+
+    char standard_library_path[64];
+    const int path_length = std::snprintf(
         standard_library_path,
         sizeof(standard_library_path),
-        "%s/lib/python3.14",
-        prefix_path
+        "/proc/self/fd/%d",
+        runtime_archive_memfd
     );
-    const int native_library_length = std::snprintf(
-        native_library_path,
-        sizeof(native_library_path),
-        "%s/lib/python3.14/lib-dynload",
-        prefix_path
-    );
-    if (standard_library_length <= 0 ||
-        static_cast<size_t>(standard_library_length) >= sizeof(standard_library_path) ||
-        native_library_length <= 0 ||
-        static_cast<size_t>(native_library_length) >= sizeof(native_library_path)) {
-        throw_runtime_exception(environment, "The isolated CPython module paths are invalid");
+    if (path_length <= 0 || static_cast<size_t>(path_length) >= sizeof(standard_library_path)) {
+        close(runtime_archive_memfd);
+        runtime_archive_memfd = -1;
+        throw_runtime_exception(environment, "The isolated CPython archive path is invalid");
         return nullptr;
     }
 
     wchar_t *standard_library_wide = Py_DecodeLocale(standard_library_path, nullptr);
-    wchar_t *native_library_wide = Py_DecodeLocale(native_library_path, nullptr);
-    if (standard_library_wide == nullptr || native_library_wide == nullptr) {
+    if (standard_library_wide == nullptr) {
         PyMem_RawFree(standard_library_wide);
-        PyMem_RawFree(native_library_wide);
+        close(runtime_archive_memfd);
+        runtime_archive_memfd = -1;
         throw_runtime_exception(environment, "The isolated CPython module paths could not be decoded");
         return nullptr;
     }
@@ -231,14 +316,12 @@ Java_com_anbhosting_app_BundledPythonRuntime_nativeInitializeIsolatedRuntime(
     config.module_search_paths_set = 1;
 
     PyStatus status = PyWideStringList_Append(&config.module_search_paths, standard_library_wide);
-    if (!PyStatus_Exception(status)) {
-        status = PyWideStringList_Append(&config.module_search_paths, native_library_wide);
-    }
     PyMem_RawFree(standard_library_wide);
-    PyMem_RawFree(native_library_wide);
     if (PyStatus_Exception(status)) {
         throw_runtime_exception(environment, status.err_msg);
         PyConfig_Clear(&config);
+        close(runtime_archive_memfd);
+        runtime_archive_memfd = -1;
         return nullptr;
     }
 
@@ -246,13 +329,15 @@ Java_com_anbhosting_app_BundledPythonRuntime_nativeInitializeIsolatedRuntime(
     PyConfig_Clear(&config);
     if (PyStatus_Exception(status)) {
         throw_runtime_exception(environment, status.err_msg);
+        close(runtime_archive_memfd);
+        runtime_archive_memfd = -1;
         return nullptr;
     }
 
     const int smoke_status = PyRun_SimpleString(
         "import json, sys\n"
         "assert sys.version_info[:2] == (3, 14)\n"
-        "assert len(sys.path) == 2\n"
+        "assert len(sys.path) == 1\n"
         "assert json.loads('{\"ready\":true}')['ready'] is True\n"
     );
     if (smoke_status != 0) {

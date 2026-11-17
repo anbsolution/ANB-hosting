@@ -16,7 +16,7 @@ import java.nio.charset.StandardCharsets
  */
 class IsolatedRuntimeWorkerService : Service() {
     private val runtimeLock = Any()
-    private var runtimePrefix: ParcelFileDescriptor? = null
+    private var pythonRuntimeStarted = false
 
     private val binder = object : IIsolatedRuntimeWorker.Stub() {
         override fun getProcessUid(): Int = Process.myUid()
@@ -27,35 +27,36 @@ class IsolatedRuntimeWorkerService : Service() {
         override fun privateStorageProbeIsReadable(): Boolean =
             File(filesDir, PRIVATE_STORAGE_PROBE).canRead()
 
-        override fun startPythonRuntime(runtimePrefixFile: ParcelFileDescriptor): String = synchronized(runtimeLock) {
+        override fun startPythonRuntime(runtimeArchiveFile: ParcelFileDescriptor): String = synchronized(runtimeLock) {
             Log.i(TAG, "CPython start requested")
             check(Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 "Isolated Python execution requires Android 10 or newer."
             }
-            if (runtimePrefix != null) {
-                runtimePrefixFile.close()
+            if (pythonRuntimeStarted) {
+                runtimeArchiveFile.close()
                 return@synchronized "CPython ${BundledPythonRuntime.VERSION}"
             }
-            val retainedPrefix = try {
-                ParcelFileDescriptor.dup(runtimePrefixFile.fileDescriptor)
+            val retainedArchive = try {
+                ParcelFileDescriptor.dup(runtimeArchiveFile.fileDescriptor)
             } finally {
-                runtimePrefixFile.close()
+                runtimeArchiveFile.close()
             }
             try {
-                Log.i(TAG, "initializing CPython from the granted prefix descriptor")
-                val version = BundledPythonRuntime.initializeIsolatedRuntime(retainedPrefix.fd)
-                runtimePrefix = retainedPrefix
+                Log.i(TAG, "initializing CPython from the granted standard-library archive")
+                val version = BundledPythonRuntime.initializeIsolatedRuntime(retainedArchive.fd)
+                pythonRuntimeStarted = true
                 Log.i(TAG, "CPython initialized: $version")
                 "CPython $version"
             } catch (error: Exception) {
                 Log.e(TAG, "CPython initialization failed", error)
-                retainedPrefix.close()
                 throw error
+            } finally {
+                retainedArchive.close()
             }
         }
 
         override fun executePythonHandler(source: String, requestJson: String): String = synchronized(runtimeLock) {
-            check(runtimePrefix != null) { "Start the isolated Python runtime first." }
+            check(pythonRuntimeStarted) { "Start the isolated Python runtime first." }
             require(source.toByteArray(StandardCharsets.UTF_8).size <= MAX_PYTHON_SOURCE_BYTES) {
                 "Python handler exceeds the 256 KiB source limit."
             }
@@ -74,8 +75,7 @@ class IsolatedRuntimeWorkerService : Service() {
 
     override fun onDestroy() {
         synchronized(runtimeLock) {
-            runCatching { runtimePrefix?.close() }
-            runtimePrefix = null
+            pythonRuntimeStarted = false
         }
         super.onDestroy()
     }

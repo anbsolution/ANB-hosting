@@ -42,7 +42,7 @@ class IsolatedRuntimeWorkerServiceTest {
         val hiddenPrivateFile = File(context.filesDir, IsolatedRuntimeWorkerService.PRIVATE_STORAGE_PROBE)
         hiddenPrivateFile.writeText("must stay private to the app uid")
         var visibleSiteFileDescriptor: ParcelFileDescriptor? = null
-        var runtimePrefixDescriptor: ParcelFileDescriptor? = null
+        var runtimeArchiveDescriptor: ParcelFileDescriptor? = null
         var bound = false
 
         val connection = object : ServiceConnection {
@@ -83,10 +83,10 @@ class IsolatedRuntimeWorkerServiceTest {
                 remoteStep("checking app-private storage access") { worker.privateStorageProbeIsReadable() },
             )
 
-            runtimePrefixDescriptor = BundledPythonRuntime.openRuntimePrefix(context)
-            Log.i("IsolatedRuntimeTest", "starting CPython with explicitly granted prefix descriptor")
+            runtimeArchiveDescriptor = BundledPythonRuntime.openRuntimeArchive(context)
+            Log.i("IsolatedRuntimeTest", "starting CPython with explicitly granted archive descriptor")
             val pythonVersion = remoteStep("starting CPython") {
-                worker.startPythonRuntime(requireNotNull(runtimePrefixDescriptor))
+                worker.startPythonRuntime(requireNotNull(runtimeArchiveDescriptor))
             }
             Log.i("IsolatedRuntimeTest", "isolated CPython started: $pythonVersion")
             assertTrue("Unexpected isolated CPython version: $pythonVersion", pythonVersion.contains("3.14.10"))
@@ -126,7 +126,7 @@ class IsolatedRuntimeWorkerServiceTest {
         } finally {
             if (bound) context.unbindService(connection)
             visibleSiteFileDescriptor?.close()
-            runtimePrefixDescriptor?.close()
+            runtimeArchiveDescriptor?.close()
             hiddenPrivateFile.delete()
             siteRoot.deleteRecursively()
             connectionExecutor.shutdownNow()
