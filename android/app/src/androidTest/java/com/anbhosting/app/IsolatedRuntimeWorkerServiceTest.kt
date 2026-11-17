@@ -70,46 +70,57 @@ class IsolatedRuntimeWorkerServiceTest {
             assertTrue("Isolated runtime worker did not connect", connected.await(10, TimeUnit.SECONDS))
 
             val worker = requireNotNull(remoteBinder.get())
-            assertNotEquals("Worker must run under an isolated UID", Process.myUid(), worker.getProcessUid())
+            val workerUid = remoteStep("reading the worker UID") { worker.getProcessUid() }
+            assertNotEquals("Worker must run under an isolated UID", Process.myUid(), workerUid)
             assertEquals(
                 "granted through file descriptor",
-                worker.readGrantedFile(requireNotNull(visibleSiteFileDescriptor)),
+                remoteStep("reading the granted file") {
+                    worker.readGrantedFile(requireNotNull(visibleSiteFileDescriptor))
+                },
             )
             assertFalse(
                 "Worker must not read ANB app-private files by path",
-                worker.privateStorageProbeIsReadable(),
+                remoteStep("checking app-private storage access") { worker.privateStorageProbeIsReadable() },
             )
 
             runtimePrefixDescriptor = BundledPythonRuntime.openRuntimePrefix(context)
             Log.i("IsolatedRuntimeTest", "starting CPython with explicitly granted prefix descriptor")
-            val pythonVersion = worker.startPythonRuntime(requireNotNull(runtimePrefixDescriptor))
+            val pythonVersion = remoteStep("starting CPython") {
+                worker.startPythonRuntime(requireNotNull(runtimePrefixDescriptor))
+            }
             Log.i("IsolatedRuntimeTest", "isolated CPython started: $pythonVersion")
             assertTrue("Unexpected isolated CPython version: $pythonVersion", pythonVersion.contains("3.14.10"))
 
             Log.i("IsolatedRuntimeTest", "executing isolated Python handler")
             val response = JSONObject(
-                worker.executePythonHandler(
-                    "def handle_request(request):\n" +
-                        "    return {'status': 200, 'body': 'offline ' + request['path']}\n",
-                    "{\"path\":\"/caf\\u00e9\"}",
-                ),
+                remoteStep("executing a Python handler") {
+                    worker.executePythonHandler(
+                        "def handle_request(request):\n" +
+                            "    return {'status': 200, 'body': 'offline ' + request['path']}\n",
+                        "{\"path\":\"/caf\\u00e9\"}",
+                    )
+                },
             )
             assertEquals(200, response.getInt("status"))
             assertEquals("offline /café", response.getString("body"))
 
             Log.i("IsolatedRuntimeTest", "checking isolated Python invocation state")
             val secondResponse = JSONObject(
-                worker.executePythonHandler(
-                    "def handle_request(request):\n" +
-                        "    return {'body': request['value']}\n",
-                    "{\"value\":\"fresh invocation\"}",
-                ),
+                remoteStep("checking per-request Python state") {
+                    worker.executePythonHandler(
+                        "def handle_request(request):\n" +
+                            "    return {'body': request['value']}\n",
+                        "{\"value\":\"fresh invocation\"}",
+                    )
+                },
             )
             assertEquals("fresh invocation", secondResponse.getString("body"))
 
             Log.i("IsolatedRuntimeTest", "checking isolated Python syntax error response")
             val failedResponse = JSONObject(
-                worker.executePythonHandler("def handle_request(:\n    pass\n", "{}"),
+                remoteStep("checking Python syntax error handling") {
+                    worker.executePythonHandler("def handle_request(:\n    pass\n", "{}")
+                },
             )
             assertEquals("Python handler execution failed", failedResponse.getString("error"))
         } finally {
@@ -120,5 +131,11 @@ class IsolatedRuntimeWorkerServiceTest {
             siteRoot.deleteRecursively()
             connectionExecutor.shutdownNow()
         }
+    }
+
+    private inline fun <T> remoteStep(name: String, action: () -> T): T = try {
+        action()
+    } catch (error: Exception) {
+        throw AssertionError("Isolated runtime worker failed while $name", error)
     }
 }
