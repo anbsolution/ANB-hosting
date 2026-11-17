@@ -2,7 +2,7 @@
 
 ## Snapshot
 
-This audit describes the Android hosting work on `main` as of 2026-11-17. CI run `44026978552` verified commit `183d8ae` on GitHub `main`; the current working change adds HTTP byte ranges and is awaiting its own CI result. The Android package ID remains `com.anbhosting.app`.
+This audit describes the Android hosting work on `main` as of 2026-11-17. CI run `44028782706` passed for commit `3f7fa19`, and CPython feasibility run `44028782663` also passed. The Android package ID remains `com.anbhosting.app`.
 
 “Added” means the implementation is present in source. It does not imply that the new Android code has passed its CI tests or a real-device check.
 
@@ -14,7 +14,7 @@ This audit describes the Android hosting work on `main` as of 2026-11-17. CI run
 - A Next.js dashboard with account, website, overview and activity views, plus a PWA app shell that does not cache API credentials or account data.
 - Android login/signup against the existing API, workspace overview, website list, and website lifecycle actions.
 - Android offline static hosting source: app-private website folders, an on-device SQLite catalog, localhost preview, optional read-only Wi-Fi access, a visible foreground service, and restart-on-next-app-launch recovery for sites left active.
-- Android static HTTP server supports single byte ranges, suffix ranges, `HEAD` range metadata, and `416` responses for unsatisfiable ranges; integration tests cover transferred-byte accounting. This change is awaiting CI.
+- Android static HTTP server supports single byte ranges, suffix ranges, `HEAD` range metadata, and `416` responses for unsatisfiable ranges; integration tests cover transferred-byte accounting, and those tests passed in CI run `44028782706`.
 - Android local virtual-host source: every saved site's `<slug>.localhost` hostname routes to that active site's root for offline phone preview over IPv4/IPv6 loopback; Wi-Fi sharing keeps the existing phone-IP/path URL.
 - Android local-domain source: each site can register and remove additional `.localhost` aliases in SQLite; the Host router resolves those aliases to the selected site's files, and the local dashboard exposes alias management and preview.
 - Configurable Android partial CPU wake lock while active sites run, with an in-app battery setting and a shortcut to Android app battery settings.
@@ -23,7 +23,7 @@ This audit describes the Android hosting work on `main` as of 2026-11-17. CI run
 - Android public GitHub repository deployment source: select a branch, tag, or commit (or use the default), resolve it to a commit SHA, deploy to a new or stopped existing site, and roll back up to three saved file snapshots capped at 50 MiB each. ZIP and path limits are enforced; no build is run.
 - GitHub Actions source for JavaScript workspace validation and an Android debug unit-test/APK build. The Android job runs `:app:testDebugUnitTest` before `:app:assembleDebug`.
 - A separate GitHub Actions Python feasibility workflow source. It verifies fixed SHA-256 checksums for the official CPython 3.14.10 Android arm64 and x86_64 packages, then runs a small import/embedding smoke test in CPython's managed Android testbed; that workflow checks upstream feasibility independently from the ANB APK build.
-- Android APK build source now stages those checksum-pinned CPython packages for arm64 and x86_64, compiles a JNI bridge against `libpython3.14.so` with the Android NDK, excludes CPython test/sample native extensions, packages the standard library and remaining native support libraries, and extracts them to app-private storage. The x86_64 emulator instrumentation source imports all 53 packaged production extensions. Other Android ABIs retain a small native library so the existing app remains installable, but they do not have Python. This does not run website code.
+- Android APK build stages checksum-pinned CPython packages for arm64 and x86_64, compiles a JNI bridge against `libpython3.14.so` with the Android NDK, excludes CPython test/sample native extensions, packages the standard library and remaining native support libraries, and extracts them to app-private storage. The x86_64 emulator instrumentation imported all 53 packaged production extensions successfully in CI run `44028782706`. Other Android ABIs retain a small native library so the existing app remains installable, but they do not have Python. This does not run website code.
 - Android has an unexported isolated runtime-worker service and an AIDL probe. Its passing instrumentation test checks that the worker has a different UID, can read an explicitly granted file descriptor, and cannot read a named ANB-private file by path. This validates the process boundary only; it does not execute Python or handle HTTP requests.
 - Optional signed Android release build source: the app version is `2` with the same `com.anbhosting.app` ID, and CI requires the existing key plus its expected certificate SHA-256 fingerprint before it will upload a release APK; no key is configured yet.
 - A Docker-based static-site engine and NGINX routing for a separate Linux host. The Docker site container has fixed CPU, memory, PID, capability, filesystem, and log limits.
@@ -55,13 +55,12 @@ This audit describes the Android hosting work on `main` as of 2026-11-17. CI run
 
 ## Not yet tested
 
-- The new byte-range behavior and its server integration tests have not yet run in GitHub Actions for the current working change.
 - The wake-lock acquire/release lifecycle has not been exercised on a physical Android device.
 - Browser preview, phone-hostname routing, Wi-Fi sharing, screen-off serving, and battery behavior have not been verified on a physical phone or across OEM power policies.
 - Version 2 release signing, the certificate-fingerprint gate, and signed APK update compatibility have not been verified. The release signing key and fingerprint are not configured in GitHub Actions.
 - No APK has been installed or tested on a physical Android device. CI builds a debug APK; it does not produce a signed release without the existing signing secrets.
 - The 32-bit app ABI placeholder libraries have not been installed on a 32-bit Android device.
-- Android local domain alias and file-management features have CI unit-test coverage, but have not been reviewed on a physical phone.
+- Android local domain alias, file-management, and byte-range features have CI unit-test coverage, but have not been reviewed on a physical phone.
 - No full Docker Compose, NGINX, DNS, ACME, private-repository GitHub deployment, or live multi-device hosting test was performed in this audit.
 - The monorepo lint, formatting, typecheck, and JavaScript test commands passed locally. API tests: 2 passed; hosting-engine tests: 2 passed. `npm run build` could not finish on Android because Next.js requested a nonexistent `@next/swc-android-arm64` binary. This device limitation is not an Android CI build result.
 
@@ -89,7 +88,7 @@ The existing web/cloud path remains separate: web or Android client → LAN NGIN
 
 ### Phase 1 — Stabilize offline static hosting
 
-- Run the Android CI tests and debug APK build for all local commits after `e074683`; fix every compile/test failure.
+- **CI complete:** run `44028782706` passed Android unit tests, debug APK build, and two emulator instrumentation tests on commit `3f7fa19`; the failed range-header test run was fixed and rerun successfully.
 - Exercise create/start/preview/stop, Wi-Fi rebind, notification denial, process death/relaunch, archive safety, backup restore, and storage accounting on Android devices.
 - Improve foreground-service and battery guidance using supported Android APIs, while showing when the OS has stopped hosting.
 - Verify CPU wake-lock acquisition/release on supported Android versions and measure screen-off serving, battery use, Doze behavior, and user battery-setting changes across device vendors.
@@ -98,7 +97,7 @@ The existing web/cloud path remains separate: web or Android client → LAN NGIN
 ### Phase 2 — Runtime foundation and Python feasibility
 
 - Define a per-site runtime contract for install/version, start/stop/restart, health, logs, and enforceable resource limits.
-- Run the CPython Android feasibility workflow against python.org's checksum-verified arm64 and x86_64 packages. Package `libpython` and its standard library in ANB through GitHub Actions, then import all packaged production native extensions on an emulator. Android uses embedded `libpython`; it does not provide a system Python executable.
+- **Feasibility and packaging smoke tests complete:** run `44028782663` passed against checksum-verified official CPython 3.14.10 Android packages; run `44028782706` passed the ANB APK's CPython imports and isolated-worker instrumentation. Android uses embedded `libpython`; it does not provide a system Python executable.
 - Keep the Kotlin HTTP server as the listener and route Python requests through an explicit worker IPC contract. On API 29+, bind one isolated service instance per site and pass only the runtime and that site's directory descriptors. The worker must not receive ANB session credentials or unrestricted access to other sites.
 - Prove worker isolation, scoped file access, request body/response streaming, process recovery, and bounded CPU/memory/storage before adding a runtime selector or running imported Python code.
 - Add Python selection only after the packaged runtime, a real HTTP app, lifecycle, useful logs, stop/restart, and device tests pass together.
