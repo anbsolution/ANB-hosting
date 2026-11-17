@@ -168,7 +168,7 @@ private fun HostingApp(api: HostingApi) {
         item { Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) { Metric("Websites", stats.optInt("websites"), Modifier.weight(1f)); Metric("Active", stats.optInt("activeWebsites"), Modifier.weight(1f), Green) } }
         item { Metric("Domains", stats.optInt("domains"), Modifier.fillMaxWidth()) }
         item { Text("Recent websites", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Navy) }
-        items((0 until minOf(websites.length(), 3)).mapNotNull { websites.optJSONObject(it) }) { SiteCard(it) { _, _ -> } }
+        items((0 until minOf(websites.length(), 3)).mapNotNull { websites.optJSONObject(it) }) { site -> SiteCard(site, action = { _, _ -> }) }
         item { Text("Storage and bandwidth are not measured by the current server build.", color = Muted, fontSize = 12.sp) }
     }
 }
