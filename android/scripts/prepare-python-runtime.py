@@ -28,6 +28,22 @@ PYTHON_MINOR = ".".join(VERSION.split(".")[:2])
 BASE_URL = f"https://www.python.org/ftp/python/{VERSION}"
 REQUIRED_MODULES = ("os.py", "socket.py", "ssl.py", "sqlite3/__init__.py")
 REQUIRED_EXTENSIONS = ("_socket", "_ssl", "_sqlite3")
+DEVELOPMENT_EXTENSION_PREFIXES = ("_test", "_ctypes_test", "_xxtest", "xx")
+
+
+def is_development_extension(module_name: str) -> bool:
+    """Return whether an extension is a CPython test fixture, not runtime code."""
+    return module_name.startswith(DEVELOPMENT_EXTENSION_PREFIXES)
+
+
+def ignore_development_extensions(directory: str, names: list[str]) -> set[str]:
+    if Path(directory).name != "lib-dynload":
+        return set()
+    return {
+        name
+        for name in names
+        if name.endswith(".so") and is_development_extension(name.split(".", 1)[0])
+    }
 
 
 def download_package(abi: str, destination: Path) -> None:
@@ -106,7 +122,11 @@ def stage_abi(abi: str, prefix: Path, output: Path) -> None:
     asset_prefix = output / "assets" / "python-runtime" / abi / "prefix"
     asset_lib = asset_prefix / "lib"
     asset_lib.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(python_lib, asset_lib / python_lib.name)
+    shutil.copytree(
+        python_lib,
+        asset_lib / python_lib.name,
+        ignore=ignore_development_extensions,
+    )
     for directory in ("engines-3", "ossl-modules"):
         source = prefix / "lib" / directory
         if source.is_dir():
@@ -121,8 +141,9 @@ def main() -> None:
     output = args.output.resolve()
     manifest = output / "manifest.json"
     expected_manifest = {
-        "layout": 3,
+        "layout": 4,
         "version": VERSION,
+        "excluded_extension_prefixes": list(DEVELOPMENT_EXTENSION_PREFIXES),
         "packages": {abi: data["sha256"] for abi, data in PACKAGES.items()},
     }
     if manifest.is_file() and json.loads(manifest.read_text(encoding="utf-8")) == expected_manifest:

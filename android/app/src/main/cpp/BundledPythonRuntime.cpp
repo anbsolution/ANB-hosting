@@ -63,7 +63,24 @@ Java_com_anbhosting_app_BundledPythonRuntime_nativeSmokeTest(
             "assert os.path.isdir(sys.prefix)\n"
             "assert socket.socket is not None\n"
             "assert sqlite3.sqlite_version\n"
-            "assert ssl.OPENSSL_VERSION\n") != 0) {
+            "assert ssl.OPENSSL_VERSION\n"
+            "import importlib.machinery\n"
+            "native_dir = os.path.join(sys.prefix, 'lib', 'python3.14', 'lib-dynload')\n"
+            "suffixes = importlib.machinery.EXTENSION_SUFFIXES\n"
+            "native_modules = set()\n"
+            "for filename in os.listdir(native_dir):\n"
+            "    for suffix in suffixes:\n"
+            "        if filename.endswith(suffix):\n"
+            "            native_modules.add(filename[:-len(suffix)])\n"
+            "            break\n"
+            "assert len(native_modules) >= 50, f'Only {len(native_modules)} production extensions were packaged'\n"
+            "native_failures = []\n"
+            "for module_name in sorted(native_modules):\n"
+            "    try:\n"
+            "        __import__(module_name)\n"
+            "    except BaseException as error:\n"
+            "        native_failures.append(f'{module_name}: {error!r}')\n"
+            "assert not native_failures, 'Native extension import failures: ' + '; '.join(native_failures)\n") != 0) {
         PyErr_Print();
         throw_runtime_exception(environment, "CPython started but a required runtime module failed to import");
         return nullptr;

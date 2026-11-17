@@ -52,6 +52,8 @@ jobs:
           gradle-version: '8.9'
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
+      - name: Test CPython Android package filtering
+        run: python3 -m unittest discover -s android/scripts -p 'test_*.py'
       - name: Install Android native build tools
         run: sdkmanager --install "ndk;27.3.13750724" "cmake;3.22.1"
       - name: Test Android local hosting

@@ -7,7 +7,7 @@ import java.io.FileNotFoundException
 
 /**
  * Installs the checksum-pinned interpreter bundled in the APK and checks that
- * its Android native modules load. This is not a website execution API.
+ * its production Android native modules load. This is not a website execution API.
  */
 object BundledPythonRuntime {
     const val VERSION = "3.14.10"
@@ -19,7 +19,7 @@ object BundledPythonRuntime {
         System.loadLibrary("anbpython")
     }
 
-    /** Extracts CPython into app-private storage and runs a fixed import check. */
+    /** Extracts CPython into app-private storage and imports every packaged production extension. */
     fun verifyBundledRuntime(context: Context): String = synchronized(lock) {
         val abi = Build.SUPPORTED_ABIS.firstOrNull { it == "arm64-v8a" || it == "x86_64" }
             ?: error("This ANB build does not include a CPython package for this device ABI")

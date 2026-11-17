@@ -9,7 +9,7 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class BundledPythonRuntimeTest {
     @Test
-    fun packagedInterpreterLoadsAndroidRuntimeModules() {
+    fun packagedInterpreterLoadsEveryProductionNativeModule() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val version = BundledPythonRuntime.verifyBundledRuntime(context)
 
