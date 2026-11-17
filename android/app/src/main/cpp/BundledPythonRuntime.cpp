@@ -181,6 +181,8 @@ Java_com_anbhosting_app_BundledPythonRuntime_nativeInitializeIsolatedRuntime(
     }
 
     char prefix_path[64];
+    char standard_library_path[128];
+    char native_library_path[160];
     const int path_length = std::snprintf(
         prefix_path,
         sizeof(prefix_path),
@@ -191,6 +193,36 @@ Java_com_anbhosting_app_BundledPythonRuntime_nativeInitializeIsolatedRuntime(
         throw_runtime_exception(environment, "The isolated CPython prefix path is invalid");
         return nullptr;
     }
+    const int standard_library_length = std::snprintf(
+        standard_library_path,
+        sizeof(standard_library_path),
+        "%s/lib/python3.14",
+        prefix_path
+    );
+    const int native_library_length = std::snprintf(
+        native_library_path,
+        sizeof(native_library_path),
+        "%s/lib/python3.14/lib-dynload",
+        prefix_path
+    );
+    if (standard_library_length <= 0 ||
+        static_cast<size_t>(standard_library_length) >= sizeof(standard_library_path) ||
+        native_library_length <= 0 ||
+        static_cast<size_t>(native_library_length) >= sizeof(native_library_path)) {
+        throw_runtime_exception(environment, "The isolated CPython module paths are invalid");
+        return nullptr;
+    }
+
+    wchar_t *prefix_wide = Py_DecodeLocale(prefix_path, nullptr);
+    wchar_t *standard_library_wide = Py_DecodeLocale(standard_library_path, nullptr);
+    wchar_t *native_library_wide = Py_DecodeLocale(native_library_path, nullptr);
+    if (prefix_wide == nullptr || standard_library_wide == nullptr || native_library_wide == nullptr) {
+        PyMem_RawFree(prefix_wide);
+        PyMem_RawFree(standard_library_wide);
+        PyMem_RawFree(native_library_wide);
+        throw_runtime_exception(environment, "The isolated CPython module paths could not be decoded");
+        return nullptr;
+    }
 
     PyConfig config;
     PyConfig_InitIsolatedConfig(&config);
@@ -198,8 +230,27 @@ Java_com_anbhosting_app_BundledPythonRuntime_nativeInitializeIsolatedRuntime(
     config.site_import = 0;
     config.write_bytecode = 0;
     config.safe_path = 1;
+    config.module_search_paths_set = 1;
 
-    PyStatus status = PyConfig_SetBytesString(&config, &config.home, prefix_path);
+    PyStatus status = PyConfig_SetString(&config, &config.prefix, prefix_wide);
+    if (!PyStatus_Exception(status)) {
+        status = PyConfig_SetString(&config, &config.base_prefix, prefix_wide);
+    }
+    if (!PyStatus_Exception(status)) {
+        status = PyConfig_SetString(&config, &config.exec_prefix, prefix_wide);
+    }
+    if (!PyStatus_Exception(status)) {
+        status = PyConfig_SetString(&config, &config.base_exec_prefix, prefix_wide);
+    }
+    if (!PyStatus_Exception(status)) {
+        status = PyWideStringList_Append(&config.module_search_paths, standard_library_wide);
+    }
+    if (!PyStatus_Exception(status)) {
+        status = PyWideStringList_Append(&config.module_search_paths, native_library_wide);
+    }
+    PyMem_RawFree(prefix_wide);
+    PyMem_RawFree(standard_library_wide);
+    PyMem_RawFree(native_library_wide);
     if (PyStatus_Exception(status)) {
         throw_runtime_exception(environment, status.err_msg);
         PyConfig_Clear(&config);
@@ -214,9 +265,9 @@ Java_com_anbhosting_app_BundledPythonRuntime_nativeInitializeIsolatedRuntime(
     }
 
     const int smoke_status = PyRun_SimpleString(
-        "import json, os, sys\n"
+        "import json, sys\n"
         "assert sys.version_info[:2] == (3, 14)\n"
-        "assert os.path.isdir(sys.prefix)\n"
+        "assert len(sys.path) == 2\n"
         "assert json.loads('{\"ready\":true}')['ready'] is True\n"
     );
     if (smoke_status != 0) {
