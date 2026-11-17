@@ -26,7 +26,7 @@ import java.util.concurrent.atomic.AtomicReference
 @RunWith(AndroidJUnit4::class)
 class IsolatedRuntimeWorkerServiceTest {
     @Test
-    fun workerHasSeparateUidAndUsesExplicitDirectoryGrant() {
+    fun workerHasSeparateUidAndReadsOnlyExplicitlyGrantedFileDescriptor() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
 
         val context = InstrumentationRegistry.getInstrumentation().targetContext
@@ -36,10 +36,10 @@ class IsolatedRuntimeWorkerServiceTest {
         val siteRoot = File(context.cacheDir, "isolated-runtime-probe-${UUID.randomUUID()}")
         assertTrue(siteRoot.mkdir())
         val visibleSiteFile = File(siteRoot, "site-file.txt")
-        visibleSiteFile.writeText("granted through directory descriptor")
+        visibleSiteFile.writeText("granted through file descriptor")
         val hiddenPrivateFile = File(context.filesDir, IsolatedRuntimeWorkerService.PRIVATE_STORAGE_PROBE)
         hiddenPrivateFile.writeText("must stay private to the app uid")
-        var siteRootDescriptor: ParcelFileDescriptor? = null
+        var visibleSiteFileDescriptor: ParcelFileDescriptor? = null
         var bound = false
 
         val connection = object : ServiceConnection {
@@ -54,7 +54,8 @@ class IsolatedRuntimeWorkerServiceTest {
         }
 
         try {
-            siteRootDescriptor = ParcelFileDescriptor.open(siteRoot, ParcelFileDescriptor.MODE_READ_ONLY)
+            visibleSiteFileDescriptor =
+                ParcelFileDescriptor.open(visibleSiteFile, ParcelFileDescriptor.MODE_READ_ONLY)
             bound = context.bindIsolatedService(
                 Intent(context, IsolatedRuntimeWorkerService::class.java),
                 Context.BIND_AUTO_CREATE,
@@ -67,14 +68,17 @@ class IsolatedRuntimeWorkerServiceTest {
 
             val worker = requireNotNull(remoteBinder.get())
             assertNotEquals("Worker must run under an isolated UID", Process.myUid(), worker.getProcessUid())
-            assertEquals(listOf(visibleSiteFile.name), worker.listGrantedDirectory(siteRootDescriptor))
+            assertEquals(
+                "granted through file descriptor",
+                worker.readGrantedFile(requireNotNull(visibleSiteFileDescriptor)),
+            )
             assertFalse(
                 "Worker must not read ANB app-private files by path",
                 worker.privateStorageProbeIsReadable(),
             )
         } finally {
             if (bound) context.unbindService(connection)
-            siteRootDescriptor?.close()
+            visibleSiteFileDescriptor?.close()
             hiddenPrivateFile.delete()
             siteRoot.deleteRecursively()
             connectionExecutor.shutdownNow()

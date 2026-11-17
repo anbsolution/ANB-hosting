@@ -15,12 +15,8 @@ class IsolatedRuntimeWorkerService : Service() {
     private val binder = object : IIsolatedRuntimeWorker.Stub() {
         override fun getProcessUid(): Int = Process.myUid()
 
-        override fun listGrantedDirectory(directory: ParcelFileDescriptor): Array<String> = directory.use {
-            val grantedDirectory = File("/proc/self/fd/${it.fd}")
-            check(grantedDirectory.isDirectory) { "The granted descriptor is not a directory." }
-            grantedDirectory.list()?.sorted()?.toTypedArray()
-                ?: error("The granted directory could not be read.")
-        }
+        override fun readGrantedFile(file: ParcelFileDescriptor): String =
+            ParcelFileDescriptor.AutoCloseInputStream(file).bufferedReader().use { it.readText() }
 
         override fun privateStorageProbeIsReadable(): Boolean =
             File(filesDir, PRIVATE_STORAGE_PROBE).canRead()

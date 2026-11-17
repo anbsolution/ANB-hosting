@@ -5,6 +5,6 @@ import android.os.ParcelFileDescriptor;
 /** Narrow diagnostics and file-descriptor probe used before enabling site code. */
 interface IIsolatedRuntimeWorker {
     int getProcessUid();
-    String[] listGrantedDirectory(in ParcelFileDescriptor directory);
+    String readGrantedFile(in ParcelFileDescriptor file);
     boolean privateStorageProbeIsReadable();
 }
