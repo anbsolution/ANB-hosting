@@ -213,11 +213,9 @@ Java_com_anbhosting_app_BundledPythonRuntime_nativeInitializeIsolatedRuntime(
         return nullptr;
     }
 
-    wchar_t *prefix_wide = Py_DecodeLocale(prefix_path, nullptr);
     wchar_t *standard_library_wide = Py_DecodeLocale(standard_library_path, nullptr);
     wchar_t *native_library_wide = Py_DecodeLocale(native_library_path, nullptr);
-    if (prefix_wide == nullptr || standard_library_wide == nullptr || native_library_wide == nullptr) {
-        PyMem_RawFree(prefix_wide);
+    if (standard_library_wide == nullptr || native_library_wide == nullptr) {
         PyMem_RawFree(standard_library_wide);
         PyMem_RawFree(native_library_wide);
         throw_runtime_exception(environment, "The isolated CPython module paths could not be decoded");
@@ -232,23 +230,10 @@ Java_com_anbhosting_app_BundledPythonRuntime_nativeInitializeIsolatedRuntime(
     config.safe_path = 1;
     config.module_search_paths_set = 1;
 
-    PyStatus status = PyConfig_SetString(&config, &config.prefix, prefix_wide);
-    if (!PyStatus_Exception(status)) {
-        status = PyConfig_SetString(&config, &config.base_prefix, prefix_wide);
-    }
-    if (!PyStatus_Exception(status)) {
-        status = PyConfig_SetString(&config, &config.exec_prefix, prefix_wide);
-    }
-    if (!PyStatus_Exception(status)) {
-        status = PyConfig_SetString(&config, &config.base_exec_prefix, prefix_wide);
-    }
-    if (!PyStatus_Exception(status)) {
-        status = PyWideStringList_Append(&config.module_search_paths, standard_library_wide);
-    }
+    PyStatus status = PyWideStringList_Append(&config.module_search_paths, standard_library_wide);
     if (!PyStatus_Exception(status)) {
         status = PyWideStringList_Append(&config.module_search_paths, native_library_wide);
     }
-    PyMem_RawFree(prefix_wide);
     PyMem_RawFree(standard_library_wide);
     PyMem_RawFree(native_library_wide);
     if (PyStatus_Exception(status)) {
