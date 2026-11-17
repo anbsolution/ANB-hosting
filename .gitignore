@@ -12,4 +12,7 @@ coverage/
 apps/dashboard/next-env.d.ts
 packages/database/generated/
 infrastructure/local-certs/
+android/.gradle/
+android/**/build/
+__pycache__/
 **/.env

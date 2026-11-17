@@ -2,7 +2,7 @@
 
 ## Snapshot
 
-This audit describes the local `main` worktree as of 2026-11-16. The GitHub `main` branch was still at `e074683` when checked, so local Android changes have not yet run in GitHub Actions. The Android package ID remains `com.anbhosting.app`.
+This audit describes the local `main` worktree as of 2026-11-17. The GitHub `main` branch was still at `e074683` when checked, so local Android changes have not yet run in GitHub Actions. The Android package ID remains `com.anbhosting.app`.
 
 “Added” means the implementation is present in source. It does not imply that the new Android code has passed its CI tests or a real-device check.
 
@@ -21,7 +21,8 @@ This audit describes the local `main` worktree as of 2026-11-16. The GitHub `mai
 - Android local request/error events, per-site file/storage totals, 30-day successful response payload totals, app memory/CPU samples, and free-storage samples.
 - Android public GitHub repository deployment source: select a branch, tag, or commit (or use the default), resolve it to a commit SHA, deploy to a new or stopped existing site, and roll back up to three saved file snapshots capped at 50 MiB each. ZIP and path limits are enforced; no build is run.
 - GitHub Actions source for JavaScript workspace validation and an Android debug unit-test/APK build. The Android job runs `:app:testDebugUnitTest` before `:app:assembleDebug`.
-- A separate GitHub Actions Python feasibility workflow source. It verifies fixed SHA-256 checksums for the official CPython 3.14.10 Android arm64 and x86_64 packages, then runs a small import/embedding smoke test in CPython's managed Android testbed. This verifies upstream package feasibility only; Python is not included in the ANB APK.
+- A separate GitHub Actions Python feasibility workflow source. It verifies fixed SHA-256 checksums for the official CPython 3.14.10 Android arm64 and x86_64 packages, then runs a small import/embedding smoke test in CPython's managed Android testbed; that workflow checks upstream feasibility independently from the ANB APK build.
+- Android APK build source now stages those checksum-pinned CPython packages for arm64 and x86_64, compiles a JNI bridge against `libpython3.14.so` with the Android NDK, packages the standard library and native support libraries, and extracts them to app-private storage. Other Android ABIs retain a small native library so the existing app remains installable, but they do not have Python. Android instrumentation and CI emulator-test source checks fixed core-module imports; it does not run website code.
 - Optional signed Android release build source: the app version is `2` with the same `com.anbhosting.app` ID, and CI requires the existing key plus its expected certificate SHA-256 fingerprint before it will upload a release APK; no key is configured yet.
 - A Docker-based static-site engine and NGINX routing for a separate Linux host. The Docker site container has fixed CPU, memory, PID, capability, filesystem, and log limits.
 - A script for private-CA HTTPS on the Linux-hosted LAN stack. Android trusts installed user CA certificates for API connections.
@@ -37,11 +38,12 @@ This audit describes the local `main` worktree as of 2026-11-16. The GitHub `mai
 - **GitHub deployment:** public prebuilt static-folder deployment with branch/tag selection, commit-SHA pinning, stopped-site updates, and a three-snapshot local rollback history (50 MiB per backup) is implemented in source. Private-repository authorization, source builds, and cloud deployment history remain missing.
 - **Dashboard parity:** the web dashboard and Android app provide the existing account/website workflows. Android does not yet have complete domains, databases, email, deployment, or hosting-plan modules; the UI is not yet a finished premium hosting console.
 - **APK updates:** the application ID is stable and an optional signed release path is source-configured, but the repository has no stable release/upload key configured. CI currently produces only debug APKs; package ID alone does not make separately signed APKs update-compatible.
-- **Python runtime feasibility:** CPython 3.14.10 arm64 and x86_64 Android packages were downloaded from python.org and their SHA-256 checksums matched the official release values. Their package layout includes `libpython3.14.so`, the Python headers, the standard library, and ABI-specific native modules. The separate CI smoke workflow has not run yet. The runtime is not embedded in ANB and does not execute website code.
+- **Python runtime:** source now packages CPython 3.14.10 arm64 and x86_64, extracts its standard library, and offers only a fixed native import check. Android app installs retain 32-bit ABI libraries without Python support. The APK build and emulator instrumentation test have not run in GitHub Actions, and this code does not execute website code or provide a website runtime selector.
 
 ## Missing
 
-- Packaged, on-device PHP, Node.js, and Python runtimes, runtime version selection, per-site process controls, and useful build/runtime logs.
+- Packaged, on-device PHP and Node.js runtimes; Python website-code execution; runtime version selection; isolated per-site process controls; and useful build/runtime logs.
+- A CPython Android package for 32-bit ABIs; the app can remain installable there, but the bundled Python check is limited to arm64 and x86_64.
 - A real MySQL-compatible customer database service inside Android, with isolated databases/users, credentials, import/export, and backup/restore.
 - Private GitHub repository authorization, on-device build steps, full build/deploy history, and cloud deployment history.
 - Custom-domain/subdomain management, DNS configuration and verification, public Let's Encrypt issuance, and renewal.
@@ -58,6 +60,8 @@ This audit describes the local `main` worktree as of 2026-11-16. The GitHub `mai
 - No APK has been built from the local commits after `e074683`, installed, or tested on an Android device. The available shells have no JDK or Gradle. The requirement to build Android APKs through GitHub Actions remains in force.
 - The latest observed GitHub Actions run was run 5 for remote commit `e074683`; it succeeded. That verifies the old remote revision, not any commits currently ahead of `origin/main`.
 - The new CPython Android emulator workflow has not run. Its source configuration and pinned archive checksums have only been inspected locally; no Python runtime claim is based on this unrun workflow.
+- The new ANB APK's NDK/CMake linkage, CPython asset packaging, fixed JNI smoke test, and emulator instrumentation workflow have not run. Python is therefore not yet verified as working inside the ANB APK.
+- The 32-bit app ABI placeholder libraries and their installation compatibility have not been checked with Android CI or a 32-bit device.
 - The Android local-domain alias schema migration, CRUD screen, Host routing, and new Robolectric tests have not run in Android CI or on a phone.
 - GitHub Actions could not be triggered for the local commits because GitHub write credentials are not configured in this workspace.
 - No full Docker Compose, NGINX, DNS, ACME, GitHub deployment, or live multi-device hosting test was performed in this audit.
@@ -96,7 +100,7 @@ The existing web/cloud path remains separate: web or Android client → LAN NGIN
 ### Phase 2 — Runtime foundation and Python feasibility
 
 - Define a per-site runtime contract for install/version, start/stop/restart, health, logs, and enforceable resource limits.
-- Run the CPython Android feasibility workflow against python.org's checksum-verified arm64 and x86_64 packages. Android uses embedded `libpython`; it does not provide a system Python executable. Package and test this runtime inside ANB through GitHub Actions before exposing it to a website.
+- Run the CPython Android feasibility workflow against python.org's checksum-verified arm64 and x86_64 packages. Package `libpython` and its standard library in ANB through GitHub Actions, then run the fixed core-module import test on an emulator. Android uses embedded `libpython`; it does not provide a system Python executable.
 - Keep the Kotlin HTTP server as the listener and route Python requests through an explicit worker IPC contract. The runtime worker must not receive ANB session credentials or unrestricted access to other sites.
 - Prove worker isolation, scoped file access, request body/response streaming, process recovery, and bounded CPU/memory/storage before adding a runtime selector or running imported Python code.
 - Add Python selection only after the packaged runtime, a real HTTP app, lifecycle, useful logs, stop/restart, and device tests pass together.
