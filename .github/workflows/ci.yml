@@ -60,7 +60,7 @@ jobs:
         run: gradle -p android :app:testDebugUnitTest
       - name: Build Android debug APK
         run: gradle -p android :app:assembleDebug
-      - name: Run packaged CPython import test on Android emulator
+      - name: Run CPython package and isolated worker tests on Android emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 35

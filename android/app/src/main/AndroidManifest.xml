@@ -26,5 +26,10 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Hosting user-selected static websites on this phone and local Wi-Fi" />
         </service>
+        <service
+            android:name=".IsolatedRuntimeWorkerService"
+            android:exported="false"
+            android:isolatedProcess="true"
+            android:process=":runtime_worker" />
     </application>
 </manifest>

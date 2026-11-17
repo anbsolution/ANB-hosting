@@ -23,6 +23,7 @@ This audit describes the local `main` worktree as of 2026-11-17. The GitHub `mai
 - GitHub Actions source for JavaScript workspace validation and an Android debug unit-test/APK build. The Android job runs `:app:testDebugUnitTest` before `:app:assembleDebug`.
 - A separate GitHub Actions Python feasibility workflow source. It verifies fixed SHA-256 checksums for the official CPython 3.14.10 Android arm64 and x86_64 packages, then runs a small import/embedding smoke test in CPython's managed Android testbed; that workflow checks upstream feasibility independently from the ANB APK build.
 - Android APK build source now stages those checksum-pinned CPython packages for arm64 and x86_64, compiles a JNI bridge against `libpython3.14.so` with the Android NDK, excludes CPython test/sample native extensions, packages the standard library and remaining native support libraries, and extracts them to app-private storage. The x86_64 emulator instrumentation source imports all 53 packaged production extensions. Other Android ABIs retain a small native library so the existing app remains installable, but they do not have Python. This does not run website code.
+- Android has an unexported isolated runtime-worker service and an AIDL probe. Its instrumentation test checks that the worker has a different UID, can enumerate a directory passed by file descriptor, and cannot read a named ANB-private file by path. This validates the process boundary only; it does not execute Python or handle HTTP requests.
 - Optional signed Android release build source: the app version is `2` with the same `com.anbhosting.app` ID, and CI requires the existing key plus its expected certificate SHA-256 fingerprint before it will upload a release APK; no key is configured yet.
 - A Docker-based static-site engine and NGINX routing for a separate Linux host. The Docker site container has fixed CPU, memory, PID, capability, filesystem, and log limits.
 - A script for private-CA HTTPS on the Linux-hosted LAN stack. Android trusts installed user CA certificates for API connections.
@@ -61,6 +62,7 @@ This audit describes the local `main` worktree as of 2026-11-17. The GitHub `mai
 - The latest observed GitHub Actions run was run 5 for remote commit `e074683`; it succeeded. That verifies the old remote revision, not any commits currently ahead of `origin/main`.
 - The new CPython Android emulator workflow has not run. Its source configuration and pinned archive checksums have only been inspected locally; no Python runtime claim is based on this unrun workflow.
 - The new ANB APK's NDK/CMake linkage, CPython asset packaging, 53-extension JNI smoke test, and emulator instrumentation workflow have not run. Python is therefore not yet verified as working inside the ANB APK.
+- The isolated worker UID, `/proc/self/fd` directory access, and denied app-private path probe have not run in an Android emulator. A passing instrumentation result is required before using this worker for site code.
 - The 32-bit app ABI placeholder libraries and their installation compatibility have not been checked with Android CI or a 32-bit device.
 - The Android local-domain alias schema migration, CRUD screen, Host routing, and new Robolectric tests have not run in Android CI or on a phone.
 - GitHub Actions could not be triggered for the local commits because GitHub write credentials are not configured in this workspace.
@@ -76,14 +78,14 @@ flowchart TD
   Service[Android foreground hosting service] --> HTTP[Local static HTTP server]
   HTTP --> Files
   HTTP --> Runtime[Future runtime supervisor]
-  Runtime --> Isolated[Isolated per-site PHP, Node, or Python process]
+  Runtime --> Isolated[Isolated per-site runtimes; AIDL boundary probe exists]
   Runtime --> DB[Future per-site MySQL-compatible service]
   Cloud[Optional self-hosted ANB sync/API] <--> Sync[Opt-in sync and conflict resolver]
   Sync <--> Store
   Sync <--> Files
 ```
 
-The current Android path is the SQLite/store, file manager, foreground service, and static HTTP server. Runtime and database boxes are future work. The first runtime design is a proposal, not implemented code: the foreground supervisor owns the listener, while an Android isolated worker handles dynamic site code over a narrow IPC contract. A file broker would grant operations only within that site's root, and the worker would not receive the app's account/session data. Android documents isolated services as having no permissions of their own and communicating through the Service API; the Python package must also be proven loadable from that process. Before enabling dynamic code, demonstrate request/response streaming, path-scoped file access, process termination/recovery, and enforceable resource limits on an actual device.
+The current Android path is the SQLite/store, file manager, foreground service, and static HTTP server. Runtime and database boxes are future work. The foreground supervisor will own the listener while an Android isolated worker handles dynamic site code over a narrow IPC contract. The worker AIDL currently exposes only an isolation probe; it is not yet connected to CPython or HTTP. The app must pass explicit file descriptors for the selected site's root and runtime files; the worker must not receive account/session data. The instrumentation source uses separate isolated service instances per site on API 29 and later; Android 8/9 static hosting remains available without per-site workers. These paths are not yet tested. Before enabling dynamic code, demonstrate descriptor-scoped reads, sibling-site and app-private denial, CPython loading from the worker, HTTP body/response streaming, process recovery, and bounded CPU/memory/storage on devices.
 
 The existing web/cloud path remains separate: web or Android client → LAN NGINX/API → PostgreSQL and the private hosting engine → static Docker site container. This stack runs on an external Linux host; it is not the Android-local server.
 
@@ -101,7 +103,7 @@ The existing web/cloud path remains separate: web or Android client → LAN NGIN
 
 - Define a per-site runtime contract for install/version, start/stop/restart, health, logs, and enforceable resource limits.
 - Run the CPython Android feasibility workflow against python.org's checksum-verified arm64 and x86_64 packages. Package `libpython` and its standard library in ANB through GitHub Actions, then import all packaged production native extensions on an emulator. Android uses embedded `libpython`; it does not provide a system Python executable.
-- Keep the Kotlin HTTP server as the listener and route Python requests through an explicit worker IPC contract. The runtime worker must not receive ANB session credentials or unrestricted access to other sites.
+- Keep the Kotlin HTTP server as the listener and route Python requests through an explicit worker IPC contract. On API 29+, bind one isolated service instance per site and pass only the runtime and that site's directory descriptors. The worker must not receive ANB session credentials or unrestricted access to other sites.
 - Prove worker isolation, scoped file access, request body/response streaming, process recovery, and bounded CPU/memory/storage before adding a runtime selector or running imported Python code.
 - Add Python selection only after the packaged runtime, a real HTTP app, lifecycle, useful logs, stop/restart, and device tests pass together.
 
@@ -150,6 +152,8 @@ Before publishing an update APK, identify the signing key and SHA-256 certificat
 ## Runtime feasibility references
 
 - CPython Android embedding and packaging: <https://docs.python.org/3.14/using/android.html> and <https://github.com/python/cpython/blob/3.14/Android/README.md>.
+- Android isolated services and per-instance binding: <https://developer.android.com/guide/topics/manifest/service-element#isolated_process> and <https://developer.android.com/reference/android/content/Context#bindIsolatedService(android.content.Intent,int,java.lang.String,java.util.concurrent.Executor,android.content.ServiceConnection)>.
+- Cross-process file-descriptor access: <https://developer.android.com/reference/android/os/ParcelFileDescriptor>.
 - Node.js Android build/support status: <https://github.com/nodejs/node/blob/main/BUILDING.md#android>.
 - PHP Android toolchain cross-compilation status: <https://www.php.net/manual/en/install.unix.source.php>.
 - Android isolated service process model: <https://developer.android.com/guide/topics/manifest/service-element#isolated_process>.

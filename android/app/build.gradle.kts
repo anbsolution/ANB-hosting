@@ -65,7 +65,10 @@ android {
             if (releaseSigningReady) signingConfig = signingConfigs.getByName("release")
         }
     }
-    buildFeatures { compose = true }
+    buildFeatures {
+        compose = true
+        aidl = true
+    }
     ndkVersion = "27.3.13750724"
     externalNativeBuild {
         cmake {
