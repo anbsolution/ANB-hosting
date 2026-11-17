@@ -19,7 +19,7 @@ This audit describes the Android hosting work on `main` as of 2026-11-17. CI run
 - Android local-domain source: each site can register and remove additional `.localhost` aliases in SQLite; the Host router resolves those aliases to the selected site's files, and the local dashboard exposes alias management and preview.
 - Configurable Android partial CPU wake lock while active sites run, with an in-app battery setting and a shortcut to Android app battery settings.
 - Android local website management source: SAF file import/export, delete/rename, small text-file editing, ZIP extraction, and ZIP backup/restore.
-- Android local request/error events, per-site file/storage totals, 30-day successful response payload totals, app memory/CPU samples, and free-storage samples. A dedicated per-site HTTP log view is now implemented in source with status/error filters, search, paging, 24-hour request/error counts, CSV export, and a 2,000-request retention cap; CI verification for this addition is pending.
+- Android local request/error events, per-site file/storage totals, 30-day successful response payload totals, app memory/CPU samples, and free-storage samples. A dedicated per-site HTTP log view is implemented with status/error filters, search, paging, 24-hour request/error counts, CSV export, and a 2,000-request retention cap; Android unit tests, debug APK build, and emulator instrumentation passed in CI run `44041629231`.
 - Android public GitHub repository deployment source: select a branch, tag, or commit (or use the default), resolve it to a commit SHA, deploy to a new or stopped existing site, and roll back up to three saved file snapshots capped at 50 MiB each. ZIP and path limits are enforced; no build is run.
 - GitHub Actions source for JavaScript workspace validation and an Android debug unit-test/APK build. The Android job runs `:app:testDebugUnitTest` before `:app:assembleDebug`.
 - A separate GitHub Actions Python feasibility workflow source. It verifies fixed SHA-256 checksums for the official CPython 3.14.10 Android arm64 and x86_64 packages, then runs a small import/embedding smoke test in CPython's managed Android testbed; that workflow checks upstream feasibility independently from the ANB APK build.
@@ -61,7 +61,7 @@ This audit describes the Android hosting work on `main` as of 2026-11-17. CI run
 - No APK has been installed or tested on a physical Android device. CI builds a debug APK; it does not produce a signed release without the existing signing secrets.
 - The 32-bit app ABI placeholder libraries have not been installed on a 32-bit Android device.
 - Android local domain alias, file-management, and byte-range features have CI unit-test coverage, but have not been reviewed on a physical phone.
-- Per-site request-log migration, filtering, retention, CSV safety, and dashboard UI have not yet passed CI for the current change or been reviewed on a physical phone.
+- Per-site request-log migration, filtering, retention, CSV safety, and dashboard UI passed CI run `44041629231`; the screen has not been visually reviewed on a physical phone.
 - No full Docker Compose, NGINX, DNS, ACME, private-repository GitHub deployment, or live multi-device hosting test was performed in this audit.
 - The monorepo lint, formatting, typecheck, and JavaScript test commands passed locally. API tests: 2 passed; hosting-engine tests: 2 passed. `npm run build` could not finish on Android because Next.js requested a nonexistent `@next/swc-android-arm64` binary. This device limitation is not an Android CI build result.
 

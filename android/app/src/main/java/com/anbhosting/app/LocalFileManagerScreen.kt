@@ -5,7 +5,6 @@ import android.provider.OpenableColumns
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -42,7 +41,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
@@ -63,6 +64,7 @@ internal fun LocalFileManagerScreen(
     var editorContents by remember(site.id) { mutableStateOf("") }
     var savedEditorContents by remember(site.id) { mutableStateOf("") }
     var busy by remember(site.id) { mutableStateOf(false) }
+    var loading by remember(site.id) { mutableStateOf(true) }
     var error by remember(site.id) { mutableStateOf("") }
     var selectedEntry by remember(site.id) { mutableStateOf<LocalFileEntry?>(null) }
     var dialogMode by remember(site.id) { mutableStateOf("") }
@@ -85,11 +87,14 @@ internal fun LocalFileManagerScreen(
 
     fun refresh() {
         scope.launch {
+            loading = true
             try {
                 entries = withContext(Dispatchers.IO) { manager.list(site.id, currentDirectory) }
                 error = ""
             } catch (failure: Exception) {
                 error = failure.message ?: "Files could not be loaded."
+            } finally {
+                loading = false
             }
         }
     }
@@ -163,29 +168,28 @@ internal fun LocalFileManagerScreen(
     MaterialTheme(colorScheme = androidx.compose.material3.lightColorScheme(primary = LocalBlue)) {
         Surface(Modifier.fillMaxSize(), color = Color(0xFFF4F6FB)) {
             Column(Modifier.fillMaxSize()) {
-                Column(Modifier.fillMaxWidth().background(LocalNavy).padding(16.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        TextButton(
-                            onClick = ::navigateBack,
-                        ) {
-                            Text(if (editingPath != null || currentDirectory.isNotBlank()) "‹ Back" else "‹ Websites", color = Color.White)
-                        }
-                        Spacer(Modifier.weight(1f))
-                        Text("LOCAL FILES", color = Color(0xFFB9C7E7), fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                    }
-                    Text(site.name, color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
-                    Text(
-                        editingPath ?: currentDirectory.ifBlank { "Website root" },
-                        color = Color(0xFFB9C7E7),
-                        fontSize = 12.sp,
-                    )
-                }
+                LocalHeroHeader(
+                    eyebrow = if (editingPath != null) "HTML · CSS · JAVASCRIPT EDITOR" else "WEBSITE MANAGEMENT",
+                    title = if (editingPath != null) "Edit website file" else site.name,
+                    subtitle = editingPath ?: currentDirectory.ifBlank { "Website root · files stay on this phone" },
+                    backLabel = if (editingPath != null || currentDirectory.isNotBlank()) "Back" else "Websites",
+                    onBack = ::navigateBack,
+                    actions = {
+                        LocalStatusPill(
+                            text = if (editingPath != null) "EDITOR" else "${entries.size} ITEMS",
+                            color = Color(0xFFD9E5FF),
+                            background = Color(0xFF263F78),
+                        )
+                    },
+                )
 
                 if (busy) CircularProgressIndicator(Modifier.padding(12.dp).size(22.dp))
                 if (error.isNotBlank()) {
                     Card(
                         Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
                         colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF1F0)),
+                        shape = RoundedCornerShape(16.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFF4C8C5)),
                     ) {
                         Text(error, Modifier.padding(14.dp), color = Color(0xFFB42318), fontSize = 12.sp)
                     }
@@ -200,6 +204,8 @@ internal fun LocalFileManagerScreen(
                             modifier = Modifier.fillMaxWidth().weight(1f),
                             label = { Text("File contents") },
                             minLines = 12,
+                            shape = RoundedCornerShape(16.dp),
+                            textStyle = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 13.sp),
                         )
                         Button(
                             onClick = {
@@ -221,33 +227,40 @@ internal fun LocalFileManagerScreen(
                             },
                             enabled = !busy,
                             modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(16.dp),
                         ) { Text("Save file") }
                     }
                 } else {
                     Row(
                         Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        OutlinedButton(onClick = { uploadPicker.launch(arrayOf("*/*")) }, enabled = !busy) { Text("Upload") }
-                        OutlinedButton(onClick = { dialogName = ""; dialogMode = "new-file" }, enabled = !busy) { Text("New file") }
-                        OutlinedButton(onClick = { dialogName = ""; dialogMode = "new-folder" }, enabled = !busy) { Text("Folder") }
+                        OutlinedButton(onClick = { uploadPicker.launch(arrayOf("*/*")) }, enabled = !busy, shape = RoundedCornerShape(14.dp)) { Text("Upload") }
+                        OutlinedButton(onClick = { dialogName = ""; dialogMode = "new-file" }, enabled = !busy, shape = RoundedCornerShape(14.dp)) { Text("New file") }
+                        OutlinedButton(onClick = { dialogName = ""; dialogMode = "new-folder" }, enabled = !busy, shape = RoundedCornerShape(14.dp)) { Text("Folder") }
                     }
                     Row(
                         Modifier.fillMaxWidth().padding(horizontal = 12.dp),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        TextButton(onClick = { backupPicker.launch("ANB-${site.slug}-backup.zip") }, enabled = !busy) {
-                            Text("Backup")
+                        OutlinedButton(onClick = { backupPicker.launch("ANB-${site.slug}-backup.zip") }, enabled = !busy, shape = RoundedCornerShape(14.dp)) {
+                            Text("Create backup")
                         }
-                        TextButton(onClick = { showRestoreWarning = true }, enabled = !busy) { Text("Restore backup") }
+                        OutlinedButton(onClick = { showRestoreWarning = true }, enabled = !busy, shape = RoundedCornerShape(14.dp)) { Text("Restore backup") }
                     }
 
                     LazyColumn(
                         Modifier.fillMaxSize().padding(horizontal = 14.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        if (entries.isEmpty()) item {
-                            Card(colors = CardDefaults.cardColors(containerColor = Color.White)) {
+                        if (loading && entries.isEmpty()) item {
+                            Column(Modifier.fillMaxWidth().padding(28.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                                CircularProgressIndicator()
+                                Text("Loading website files…", color = LocalMuted, fontSize = 12.sp)
+                            }
+                        }
+                        if (!loading && entries.isEmpty() && error.isBlank()) item {
+                            LocalPremiumCard {
                                 Column(Modifier.fillMaxWidth().padding(18.dp)) {
                                     Text("This folder is empty", color = LocalNavy, fontWeight = FontWeight.Bold)
                                     Text("Upload a website file or create a text file to begin.", color = LocalMuted, fontSize = 12.sp)
@@ -255,7 +268,7 @@ internal fun LocalFileManagerScreen(
                             }
                         }
                         items(entries, key = { it.relativePath }) { entry ->
-                            Card(colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(14.dp)) {
+                            LocalPremiumCard {
                                 Row(
                                     Modifier.fillMaxWidth().padding(start = 12.dp, end = 4.dp, top = 10.dp, bottom = 10.dp),
                                     verticalAlignment = Alignment.CenterVertically,

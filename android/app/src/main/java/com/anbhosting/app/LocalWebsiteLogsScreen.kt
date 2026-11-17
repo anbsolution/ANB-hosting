@@ -3,7 +3,6 @@ package com.anbhosting.app
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -14,7 +13,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -129,20 +127,21 @@ internal fun LocalWebsiteLogsScreen(
     MaterialTheme(colorScheme = androidx.compose.material3.lightColorScheme(primary = LocalBlue)) {
         Surface(Modifier.fillMaxSize(), color = Color(0xFFF4F6FB)) {
             Column(Modifier.fillMaxSize()) {
-                Column(Modifier.fillMaxWidth().background(LocalNavy).padding(16.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        TextButton(onClick = onBack) { Text("‹ Back", color = Color.White) }
-                        Spacer(Modifier.weight(1f))
+                LocalHeroHeader(
+                    eyebrow = "TRAFFIC · ERRORS · HEALTH",
+                    title = "Request activity",
+                    subtitle = "${site.name} · request history is stored on this phone.",
+                    backLabel = "Website",
+                    onBack = onBack,
+                    actions = {
                         TextButton(onClick = { load(reset = true) }, enabled = !loading) {
                             Text("Refresh", color = Color.White)
                         }
                         TextButton(onClick = { exportLauncher.launch("${site.slug}-request-logs.csv") }) {
-                            Text("Export CSV", color = Color.White)
+                            Text("Export", color = Color.White)
                         }
-                    }
-                    Text("Website logs", color = Color.White, fontSize = 23.sp, fontWeight = FontWeight.Bold)
-                    Text(site.name, color = Color(0xFFB9C7E7), fontSize = 13.sp)
-                }
+                    },
+                )
 
                 LazyColumn(
                     Modifier.fillMaxSize().padding(horizontal = 16.dp),
@@ -150,9 +149,9 @@ internal fun LocalWebsiteLogsScreen(
                 ) {
                     item {
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            LogMetric("Requests / 24h", summary.requestsLast24Hours.toString(), Modifier.weight(1f))
-                            LogMetric("Errors / 24h", summary.errorsLast24Hours.toString(), Modifier.weight(1f))
-                            LogMetric("Traffic / 30d", formatLogBytes(traffic30Days), Modifier.weight(1f))
+                            LocalMetricCard("Requests / 24h", summary.requestsLast24Hours.toString(), Modifier.weight(1f))
+                            LocalMetricCard("Errors / 24h", summary.errorsLast24Hours.toString(), Modifier.weight(1f))
+                            LocalMetricCard("Traffic / 30d", formatLogBytes(traffic30Days), Modifier.weight(1f))
                         }
                     }
                     item {
@@ -164,14 +163,14 @@ internal fun LocalWebsiteLogsScreen(
                         Spacer(Modifier.height(4.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             if (errorsOnly) {
-                                OutlinedButton(onClick = { errorsOnly = false }, enabled = !loading) { Text("All requests") }
+                                OutlinedButton(onClick = { errorsOnly = false }, enabled = !loading, shape = RoundedCornerShape(14.dp)) { Text("All requests") }
                             } else {
-                                Button(onClick = { errorsOnly = true }, enabled = !loading) { Text("All requests") }
+                                Button(onClick = { errorsOnly = true }, enabled = !loading, shape = RoundedCornerShape(14.dp)) { Text("All requests") }
                             }
                             if (errorsOnly) {
-                                Button(onClick = { errorsOnly = false }, enabled = !loading) { Text("Errors only") }
+                                Button(onClick = { errorsOnly = false }, enabled = !loading, shape = RoundedCornerShape(14.dp)) { Text("Errors only") }
                             } else {
-                                OutlinedButton(onClick = { errorsOnly = true }, enabled = !loading) { Text("Errors only") }
+                                OutlinedButton(onClick = { errorsOnly = true }, enabled = !loading, shape = RoundedCornerShape(14.dp)) { Text("Errors only") }
                             }
                         }
                     }
@@ -182,6 +181,7 @@ internal fun LocalWebsiteLogsScreen(
                             modifier = Modifier.fillMaxWidth(),
                             label = { Text("Search path, status, or error") },
                             singleLine = true,
+                            shape = RoundedCornerShape(16.dp),
                         )
                     }
                     if (errorMessage.isNotBlank()) item { LogNotice(errorMessage, isError = true) }
@@ -203,7 +203,7 @@ internal fun LocalWebsiteLogsScreen(
                         ).any { it.contains(needle, ignoreCase = true) }
                     }
                     if (!loading && entries.isEmpty() && errorMessage.isBlank()) item {
-                        Card(colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(18.dp)) {
+                        LocalPremiumCard {
                             Column(Modifier.fillMaxWidth().padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                                 Text(if (errorsOnly) "No website errors" else "No requests recorded yet", color = LocalNavy, fontWeight = FontWeight.Bold)
                                 Text(
@@ -226,6 +226,7 @@ internal fun LocalWebsiteLogsScreen(
                             onClick = { load(reset = false) },
                             enabled = !loading,
                             modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(14.dp),
                         ) { Text(if (loading) "Loading…" else "Load more") }
                     }
                     item { Spacer(Modifier.height(18.dp)) }
@@ -242,13 +243,16 @@ private fun RequestLogCard(entry: LocalHttpRequestLog) {
         0 -> "Connection failed"
         else -> "HTTP ${entry.statusCode}"
     }
-    Card(colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(16.dp)) {
+    LocalPremiumCard {
         Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(entry.method, color = LocalNavy, fontWeight = FontWeight.Bold, fontSize = 12.sp)
                 Spacer(Modifier.weight(1f))
-                Spacer(Modifier.padding(end = 6.dp).background(if (failed) Color(0xFFB42318) else LocalGreen, CircleShape).padding(3.dp))
-                Text(status, color = if (failed) Color(0xFFB42318) else LocalGreen, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
+                LocalStatusPill(
+                    text = status,
+                    color = if (failed) Color(0xFFB42318) else LocalGreen,
+                    background = if (failed) Color(0xFFFFEEEC) else Color(0xFFE9F7F0),
+                )
             }
             Text(entry.path, color = LocalBlue, fontSize = 12.sp)
             Text(
@@ -264,18 +268,15 @@ private fun RequestLogCard(entry: LocalHttpRequestLog) {
 }
 
 @Composable
-private fun LogMetric(label: String, value: String, modifier: Modifier = Modifier) {
-    Card(modifier = modifier, colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(14.dp)) {
-        Column(Modifier.fillMaxWidth().padding(10.dp)) {
-            Text(label, color = LocalMuted, fontSize = 9.sp)
-            Text(value, color = LocalNavy, fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1)
-        }
-    }
-}
-
-@Composable
 private fun LogNotice(message: String, isError: Boolean) {
-    Card(colors = CardDefaults.cardColors(containerColor = if (isError) Color(0xFFFFF1F0) else Color(0xFFEAF7F1))) {
+    Card(
+        colors = CardDefaults.cardColors(containerColor = if (isError) Color(0xFFFFF1F0) else Color(0xFFEAF7F1)),
+        shape = RoundedCornerShape(16.dp),
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            if (isError) Color(0xFFF4C8C5) else Color(0xFFB9E4D0),
+        ),
+    ) {
         Text(
             message,
             Modifier.fillMaxWidth().padding(12.dp),

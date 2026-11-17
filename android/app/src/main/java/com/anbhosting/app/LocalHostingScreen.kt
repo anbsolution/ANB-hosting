@@ -4,7 +4,7 @@ import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.background
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -19,7 +19,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -314,23 +313,180 @@ internal fun LocalHostingScreen(
                     onBack = { logsSite = null; reload() },
                 )
             } else Column(Modifier.fillMaxSize()) {
-                Column(Modifier.fillMaxWidth().background(LocalNavy).padding(20.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        TextButton(onClick = onBack) { Text("‹ Back", color = Color.White) }
-                        Spacer(Modifier.weight(1f))
+                LocalHeroHeader(
+                    eyebrow = "ANB HOSTING · ON DEVICE",
+                    title = "Host on this phone",
+                    subtitle = "Your sites and settings stay on this device, ready for offline preview.",
+                    backLabel = "Back",
+                    onBack = onBack,
+                    actions = {
                         TextButton(onClick = { reload() }) { Text("Refresh", color = Color.White) }
-                        Text("LOCAL MODE", color = Color(0xFFB9C7E7), fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                    }
-                    Text("Host on this phone", color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold)
-                    Text("Sites and settings are stored on this device.", color = Color(0xFFB9C7E7), fontSize = 13.sp)
-                }
+                        LocalStatusPill("LOCAL", LocalGreen, Color(0xFF173D43))
+                    },
+                )
 
                 LazyColumn(
                     Modifier.fillMaxSize().padding(horizontal = 16.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     item {
-                        Card(colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(18.dp)) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            LocalMetricCard("ANB RAM", formatBytes(deviceMetrics.appMemoryBytes), Modifier.weight(1f))
+                            LocalMetricCard(
+                                "App CPU",
+                                deviceMetrics.appCpuPercent?.let { "${"%.1f".format(it)}%" } ?: "Unavailable",
+                                Modifier.weight(1f),
+                            )
+                            LocalMetricCard("Free storage", formatBytes(deviceMetrics.freeStorageBytes), Modifier.weight(1f))
+                        }
+                    }
+
+                    item {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text("Local websites", color = LocalNavy, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                                Text("${sites.size} saved · ${sites.count { it.status == LocalHostingStore.STATUS_ACTIVE }} running", color = LocalMuted, fontSize = 12.sp)
+                            }
+                            Button(
+                                onClick = { siteName = ""; showCreate = true },
+                                shape = RoundedCornerShape(16.dp),
+                            ) { Text("New site") }
+                        }
+                        OutlinedButton(
+                            onClick = {
+                                targetSiteId = null
+                                githubRepositoryUrl = ""
+                                githubSiteName = ""
+                                githubPublishDirectory = ""
+                                githubRef = ""
+                                error = ""
+                                showGithubDeployment = true
+                            },
+                            enabled = !busy,
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(16.dp),
+                        ) { Text("Deploy public GitHub site") }
+                    }
+
+                    if (error.isNotBlank()) item {
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF1F0)),
+                            shape = RoundedCornerShape(18.dp),
+                            border = BorderStroke(1.dp, Color(0xFFF4C8C5)),
+                        ) {
+                            Text(error, Modifier.fillMaxWidth().padding(14.dp), color = Color(0xFFB42318), fontSize = 13.sp)
+                        }
+                    }
+
+                    if (sites.isEmpty()) item {
+                        LocalPremiumCard {
+                            Column(Modifier.fillMaxWidth().padding(22.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text("No local sites yet", color = LocalNavy, fontWeight = FontWeight.Bold)
+                                Text("Create a site, then start it to preview the starter page offline.", color = LocalMuted, fontSize = 12.sp)
+                            }
+                        }
+                    }
+
+                    items(sites, key = { it.id }) { site ->
+                        val deployment = deploymentsBySite[site.id]
+                        val siteUrl = if (allowLan && phoneAddress != null) {
+                            "http://$phoneAddress:${LocalStaticServer.PORT}/s/${site.slug}/"
+                        } else {
+                            "http://${site.localHostname}:${LocalStaticServer.PORT}/"
+                        }
+                        LocalPremiumCard {
+                            Column(Modifier.fillMaxWidth().padding(16.dp)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Column(Modifier.weight(1f)) {
+                                        Text(site.name, color = LocalNavy, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                                        Text(site.slug, color = LocalMuted, fontSize = 12.sp)
+                                        val usage = usageBySite[site.id]
+                                        Text(
+                                            usage?.let {
+                                                "${it.fileCount} files · ${formatBytes(it.storedBytes)} · " +
+                                                    "${formatBytes(it.trafficLast30DaysBytes)} served/30d"
+                                            } ?: "Measuring local usage…",
+                                            color = LocalMuted,
+                                            fontSize = 10.sp,
+                                        )
+                                    }
+                                    val running = site.status == LocalHostingStore.STATUS_ACTIVE
+                                    LocalStatusPill(
+                                        text = if (running) "RUNNING" else "STOPPED",
+                                        color = if (running) LocalGreen else LocalMuted,
+                                        background = if (running) Color(0xFFE9F7F0) else Color(0xFFF0F2F7),
+                                    )
+                                }
+                                Spacer(Modifier.height(12.dp))
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    if (site.status == LocalHostingStore.STATUS_ACTIVE) {
+                                        OutlinedButton(
+                                            onClick = { onOpenPreview(siteUrl) },
+                                            enabled = !busy,
+                                            shape = RoundedCornerShape(14.dp),
+                                        ) { Text("Preview") }
+                                        OutlinedButton(onClick = { stopSite(site) }, enabled = !busy, shape = RoundedCornerShape(14.dp)) { Text("Stop") }
+                                    } else {
+                                        Button(onClick = { startSite(site) }, enabled = !busy, shape = RoundedCornerShape(14.dp)) { Text("Start hosting") }
+                                    }
+                                }
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    OutlinedButton(onClick = { managedSite = site }, enabled = !busy, shape = RoundedCornerShape(14.dp)) { Text("Files") }
+                                    OutlinedButton(onClick = { logsSite = site }, enabled = !busy, shape = RoundedCornerShape(14.dp)) { Text("Logs") }
+                                    TextButton(onClick = { pendingDelete = site }, enabled = !busy) {
+                                        Text("Delete website", color = Color(0xFFB42318))
+                                    }
+                                }
+                                OutlinedButton(
+                                    onClick = {
+                                        localDomainSite = site
+                                        localDomainLabel = ""
+                                        error = ""
+                                    },
+                                    enabled = !busy,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    shape = RoundedCornerShape(14.dp),
+                                ) { Text("Manage local domains (${(aliasesBySite[site.id]?.size ?: 0) + 1})") }
+                                if (site.status == LocalHostingStore.STATUS_STOPPED) {
+                                    OutlinedButton(
+                                        onClick = {
+                                            targetSiteId = site.id
+                                            githubRepositoryUrl = ""
+                                            githubSiteName = site.name
+                                            githubPublishDirectory = ""
+                                            githubRef = ""
+                                            error = ""
+                                            showGithubDeployment = true
+                                        },
+                                        enabled = !busy,
+                                        shape = RoundedCornerShape(14.dp),
+                                    ) { Text("Deploy update from GitHub") }
+                                }
+                                deployment?.let { latest ->
+                                    Spacer(Modifier.height(8.dp))
+                                    Text(
+                                        "GitHub ${latest.ref} · ${latest.commitSha.take(8)}",
+                                        color = LocalMuted,
+                                        fontSize = 11.sp,
+                                    )
+                                    OutlinedButton(
+                                        onClick = {
+                                            error = ""
+                                            pendingRollback = latest
+                                        },
+                                        enabled = !busy && site.status == LocalHostingStore.STATUS_STOPPED,
+                                        shape = RoundedCornerShape(14.dp),
+                                    ) { Text("Rollback latest deployment") }
+                                }
+                                if (site.status == LocalHostingStore.STATUS_ACTIVE) {
+                                    Text(siteUrl, color = LocalBlue, fontSize = 11.sp)
+                                }
+                            }
+                        }
+                    }
+
+                    item {
+                        LocalPremiumCard {
                             Column(Modifier.fillMaxWidth().padding(16.dp)) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Column(Modifier.weight(1f)) {
@@ -375,7 +531,7 @@ internal fun LocalHostingScreen(
                     }
 
                     item {
-                        Card(colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(18.dp)) {
+                        LocalPremiumCard {
                             Column(Modifier.fillMaxWidth().padding(16.dp)) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Column(Modifier.weight(1f)) {
@@ -414,156 +570,6 @@ internal fun LocalHostingScreen(
                                             .onFailure { error = "App battery settings could not be opened." }
                                     },
                                 ) { Text("Open app battery settings") }
-                            }
-                        }
-                    }
-
-                    item {
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            UsageMetric("ANB RAM", formatBytes(deviceMetrics.appMemoryBytes), Modifier.weight(1f))
-                            UsageMetric(
-                                "App CPU",
-                                deviceMetrics.appCpuPercent?.let { "${"%.1f".format(it)}%" } ?: "Sample again",
-                                Modifier.weight(1f),
-                            )
-                            UsageMetric("Free storage", formatBytes(deviceMetrics.freeStorageBytes), Modifier.weight(1f))
-                        }
-                    }
-
-                    item {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Column(Modifier.weight(1f)) {
-                                Text("Local websites", color = LocalNavy, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                                Text("${sites.size} saved · ${sites.count { it.status == LocalHostingStore.STATUS_ACTIVE }} running", color = LocalMuted, fontSize = 12.sp)
-                            }
-                            Button(onClick = { siteName = ""; showCreate = true }) { Text("New site") }
-                        }
-                        OutlinedButton(
-                            onClick = {
-                                targetSiteId = null
-                                githubRepositoryUrl = ""
-                                githubSiteName = ""
-                                githubPublishDirectory = ""
-                                githubRef = ""
-                                error = ""
-                                showGithubDeployment = true
-                            },
-                            enabled = !busy,
-                            modifier = Modifier.fillMaxWidth(),
-                        ) { Text("Deploy public GitHub site") }
-                    }
-
-                    if (error.isNotBlank()) item {
-                        Card(colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF1F0))) {
-                            Text(error, Modifier.fillMaxWidth().padding(14.dp), color = Color(0xFFB42318), fontSize = 13.sp)
-                        }
-                    }
-
-                    if (sites.isEmpty()) item {
-                        Card(colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(18.dp)) {
-                            Column(Modifier.fillMaxWidth().padding(22.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                                Text("No local sites yet", color = LocalNavy, fontWeight = FontWeight.Bold)
-                                Text("Create a site, then start it to preview the starter page offline.", color = LocalMuted, fontSize = 12.sp)
-                            }
-                        }
-                    }
-
-                    items(sites, key = { it.id }) { site ->
-                        val deployment = deploymentsBySite[site.id]
-                        val siteUrl = if (allowLan && phoneAddress != null) {
-                            "http://$phoneAddress:${LocalStaticServer.PORT}/s/${site.slug}/"
-                        } else {
-                            "http://${site.localHostname}:${LocalStaticServer.PORT}/"
-                        }
-                        Card(colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(18.dp)) {
-                            Column(Modifier.fillMaxWidth().padding(16.dp)) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Column(Modifier.weight(1f)) {
-                                        Text(site.name, color = LocalNavy, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                                        Text(site.slug, color = LocalMuted, fontSize = 12.sp)
-                                        val usage = usageBySite[site.id]
-                                        Text(
-                                            usage?.let {
-                                                "${it.fileCount} files · ${formatBytes(it.storedBytes)} · " +
-                                                    "${formatBytes(it.trafficLast30DaysBytes)} served/30d"
-                                            } ?: "Measuring local usage…",
-                                            color = LocalMuted,
-                                            fontSize = 10.sp,
-                                        )
-                                    }
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Spacer(Modifier.size(7.dp).background(
-                                            if (site.status == LocalHostingStore.STATUS_ACTIVE) LocalGreen else LocalMuted,
-                                            CircleShape,
-                                        ))
-                                        Text(
-                                            if (site.status == LocalHostingStore.STATUS_ACTIVE) " Running" else " Stopped",
-                                            color = if (site.status == LocalHostingStore.STATUS_ACTIVE) LocalGreen else LocalMuted,
-                                            fontSize = 12.sp,
-                                            fontWeight = FontWeight.SemiBold,
-                                        )
-                                    }
-                                }
-                                Spacer(Modifier.height(12.dp))
-                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    if (site.status == LocalHostingStore.STATUS_ACTIVE) {
-                                        OutlinedButton(
-                                            onClick = { onOpenPreview(siteUrl) },
-                                            enabled = !busy,
-                                        ) { Text("Preview") }
-                                        OutlinedButton(onClick = { stopSite(site) }, enabled = !busy) { Text("Stop") }
-                                    } else {
-                                        Button(onClick = { startSite(site) }, enabled = !busy) { Text("Start hosting") }
-                                    }
-                                }
-                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    OutlinedButton(onClick = { managedSite = site }, enabled = !busy) { Text("Files") }
-                                    OutlinedButton(onClick = { logsSite = site }, enabled = !busy) { Text("Logs") }
-                                    TextButton(onClick = { pendingDelete = site }, enabled = !busy) {
-                                        Text("Delete website", color = Color(0xFFB42318))
-                                    }
-                                }
-                                OutlinedButton(
-                                    onClick = {
-                                        localDomainSite = site
-                                        localDomainLabel = ""
-                                        error = ""
-                                    },
-                                    enabled = !busy,
-                                    modifier = Modifier.fillMaxWidth(),
-                                ) { Text("Manage local domains (${(aliasesBySite[site.id]?.size ?: 0) + 1})") }
-                                if (site.status == LocalHostingStore.STATUS_STOPPED) {
-                                    OutlinedButton(
-                                        onClick = {
-                                            targetSiteId = site.id
-                                            githubRepositoryUrl = ""
-                                            githubSiteName = site.name
-                                            githubPublishDirectory = ""
-                                            githubRef = ""
-                                            error = ""
-                                            showGithubDeployment = true
-                                        },
-                                        enabled = !busy,
-                                    ) { Text("Deploy update from GitHub") }
-                                }
-                                deployment?.let { latest ->
-                                    Spacer(Modifier.height(8.dp))
-                                    Text(
-                                        "GitHub ${latest.ref} · ${latest.commitSha.take(8)}",
-                                        color = LocalMuted,
-                                        fontSize = 11.sp,
-                                    )
-                                    OutlinedButton(
-                                        onClick = {
-                                            error = ""
-                                            pendingRollback = latest
-                                        },
-                                        enabled = !busy && site.status == LocalHostingStore.STATUS_STOPPED,
-                                    ) { Text("Rollback latest deployment") }
-                                }
-                                if (site.status == LocalHostingStore.STATUS_ACTIVE) {
-                                    Text(siteUrl, color = LocalBlue, fontSize = 11.sp)
-                                }
                             }
                         }
                     }
@@ -802,14 +808,4 @@ private fun formatBytes(bytes: Long): String = when {
     bytes < 1024 * 1024 -> "${bytes / 1024} KiB"
     bytes < 1024L * 1024 * 1024 -> "${bytes / (1024 * 1024)} MiB"
     else -> "${bytes / (1024L * 1024 * 1024)} GiB"
-}
-
-@Composable
-private fun UsageMetric(label: String, value: String, modifier: Modifier = Modifier) {
-    Card(modifier = modifier, colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(14.dp)) {
-        Column(Modifier.fillMaxWidth().padding(10.dp)) {
-            Text(label, color = LocalMuted, fontSize = 10.sp)
-            Text(value, color = LocalNavy, fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1)
-        }
-    }
 }
