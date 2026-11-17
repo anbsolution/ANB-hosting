@@ -27,6 +27,24 @@ data class LocalHostingEvent(
     val createdAt: Long,
 )
 
+data class LocalHttpRequestLog(
+    val id: Long,
+    val siteId: String,
+    val method: String,
+    val path: String,
+    val statusCode: Int,
+    val responseBytes: Long,
+    val errorMessage: String,
+    val createdAt: Long,
+) {
+    val isError: Boolean get() = statusCode == 0 || statusCode >= 400 || errorMessage.isNotBlank()
+}
+
+data class LocalHttpRequestSummary(
+    val requestsLast24Hours: Long,
+    val errorsLast24Hours: Long,
+)
+
 data class LocalHostAlias(
     val id: String,
     val siteId: String,
@@ -80,12 +98,14 @@ class LocalHostingStore(context: Context) : SQLiteOpenHelper(
         createTrafficTable(db)
         createDeploymentTable(db)
         createLocalHostAliasTable(db)
+        createHttpRequestLogTable(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion < 2) createTrafficTable(db)
         if (oldVersion < 3) createDeploymentTable(db)
         if (oldVersion < 4) createLocalHostAliasTable(db)
+        if (oldVersion < 5) createHttpRequestLogTable(db)
     }
 
     fun listSites(): List<LocalSite> {
@@ -221,6 +241,7 @@ class LocalHostingStore(context: Context) : SQLiteOpenHelper(
         writableDatabase.delete("local_host_aliases", "site_id = ?", arrayOf(id))
         writableDatabase.delete("daily_traffic", "site_id = ?", arrayOf(id))
         writableDatabase.delete("deployments", "site_id = ?", arrayOf(id))
+        writableDatabase.delete("http_request_logs", "site_id = ?", arrayOf(id))
         backupFileNames.forEach { backupName ->
             if (backupName.matches(Regex("deploy-[a-f0-9-]{36}\\.zip"))) {
                 File(appContext.filesDir, "github-deployment-backups/$backupName").delete()
@@ -443,6 +464,134 @@ class LocalHostingStore(context: Context) : SQLiteOpenHelper(
         return result
     }
 
+    /** Store bounded per-site HTTP access and error history; query strings are excluded by the server. */
+    fun recordHttpRequest(
+        siteId: String,
+        method: String,
+        path: String,
+        statusCode: Int,
+        responseBytes: Long,
+        errorMessage: String?,
+    ) {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            val siteExists = db.query(
+                "sites",
+                arrayOf("id"),
+                "id = ?",
+                arrayOf(siteId),
+                null,
+                null,
+                null,
+                "1",
+            ).use { it.moveToFirst() }
+            if (!siteExists) return
+
+            db.insertOrThrow(
+                "http_request_logs",
+                null,
+                ContentValues().apply {
+                    put("site_id", siteId)
+                    put("method", method.uppercase().take(16))
+                    put("path", path.take(MAX_REQUEST_LOG_PATH_CHARS))
+                    put("status_code", statusCode.coerceIn(0, 599))
+                    put("response_bytes", responseBytes.coerceAtLeast(0))
+                    put("error_message", errorMessage.orEmpty().take(MAX_REQUEST_LOG_ERROR_CHARS))
+                    put("created_at", System.currentTimeMillis())
+                },
+            )
+            db.execSQL(
+                "DELETE FROM http_request_logs WHERE site_id = ? AND id NOT IN " +
+                    "(SELECT id FROM http_request_logs WHERE site_id = ? ORDER BY id DESC LIMIT ?)",
+                arrayOf(siteId, siteId, MAX_REQUEST_LOGS_PER_SITE),
+            )
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
+
+    fun httpRequestSummary(siteId: String, nowMillis: Long = System.currentTimeMillis()): LocalHttpRequestSummary {
+        val since = nowMillis - REQUEST_LOG_SUMMARY_WINDOW_MS
+        return readableDatabase.rawQuery(
+            """SELECT COUNT(*),
+                SUM(CASE WHEN status_code = 0 OR status_code >= 400 OR error_message <> '' THEN 1 ELSE 0 END)
+                FROM http_request_logs WHERE site_id = ? AND created_at >= ?""".trimIndent(),
+            arrayOf(siteId, since.toString()),
+        ).use { cursor ->
+            if (cursor.moveToFirst()) LocalHttpRequestSummary(cursor.getLong(0), cursor.getLong(1))
+            else LocalHttpRequestSummary(0, 0)
+        }
+    }
+
+    fun httpRequestLogs(
+        siteId: String,
+        errorsOnly: Boolean = false,
+        beforeId: Long? = null,
+        limit: Int = REQUEST_LOG_PAGE_SIZE,
+    ): List<LocalHttpRequestLog> {
+        val selection = buildList {
+            add("site_id = ?")
+            if (errorsOnly) add("(status_code = 0 OR status_code >= 400 OR error_message <> '')")
+            if (beforeId != null) add("id < ?")
+        }.joinToString(" AND ")
+        val args = buildList {
+            add(siteId)
+            if (beforeId != null) add(beforeId.toString())
+        }.toTypedArray()
+        return readableDatabase.query(
+            "http_request_logs",
+            REQUEST_LOG_COLUMNS,
+            selection,
+            args,
+            null,
+            null,
+            "id DESC",
+            limit.coerceIn(1, MAX_REQUEST_LOGS_PER_SITE).toString(),
+        ).use { cursor ->
+            buildList {
+                while (cursor.moveToNext()) add(
+                    LocalHttpRequestLog(
+                        id = cursor.getLong(0),
+                        siteId = cursor.getString(1),
+                        method = cursor.getString(2),
+                        path = cursor.getString(3),
+                        statusCode = cursor.getInt(4),
+                        responseBytes = cursor.getLong(5),
+                        errorMessage = cursor.getString(6),
+                        createdAt = cursor.getLong(7),
+                    ),
+                )
+            }
+        }
+    }
+
+    fun requestLogsCsv(siteId: String): String {
+        val rows = httpRequestLogs(siteId, limit = MAX_REQUEST_LOGS_PER_SITE).asReversed()
+        return buildString {
+            appendLine("time,method,path,status,response_bytes,error")
+            rows.forEach { row ->
+                appendLine(
+                    listOf(
+                        java.text.DateFormat.getDateTimeInstance().format(java.util.Date(row.createdAt)),
+                        row.method,
+                        row.path,
+                        if (row.statusCode == 0) "connection-failed" else row.statusCode.toString(),
+                        row.responseBytes.toString(),
+                        row.errorMessage,
+                    ).joinToString(",") { it.toSafeCsvCell() },
+                )
+            }
+        }
+    }
+
+    private fun String.toSafeCsvCell(): String {
+        val startsWithFormula = trimStart().firstOrNull()?.let { it == '=' || it == '+' || it == '-' || it == '@' } == true
+        val spreadsheetSafe = if (startsWithFormula) "'$this" else this
+        return "\"${spreadsheetSafe.replace("\"", "\"\"").replace("\r", " ").replace("\n", " ")}\""
+    }
+
     fun recordEvent(siteId: String?, action: String, detail: String) {
         val values = ContentValues().apply {
             if (siteId == null) putNull("site_id") else put("site_id", siteId)
@@ -580,19 +729,44 @@ class LocalHostingStore(context: Context) : SQLiteOpenHelper(
         db.execSQL("CREATE INDEX local_host_aliases_site_idx ON local_host_aliases(site_id, hostname)")
     }
 
+    private fun createHttpRequestLogTable(db: SQLiteDatabase) {
+        db.execSQL(
+            """CREATE TABLE http_request_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                site_id TEXT NOT NULL,
+                method TEXT NOT NULL,
+                path TEXT NOT NULL,
+                status_code INTEGER NOT NULL,
+                response_bytes INTEGER NOT NULL,
+                error_message TEXT NOT NULL,
+                created_at INTEGER NOT NULL
+            )""".trimIndent(),
+        )
+        db.execSQL("CREATE INDEX http_request_logs_site_id_idx ON http_request_logs(site_id, id DESC)")
+        db.execSQL("CREATE INDEX http_request_logs_site_time_idx ON http_request_logs(site_id, created_at DESC)")
+    }
+
     companion object {
         const val STATUS_ACTIVE = "ACTIVE"
         const val STATUS_STOPPED = "STOPPED"
         const val DEPLOYMENT_APPLIED = "APPLIED"
         const val DEPLOYMENT_ROLLED_BACK = "ROLLED_BACK"
         private const val DATABASE_NAME = "anb-local-hosting.db"
-        private const val DATABASE_VERSION = 4
+        const val MAX_REQUEST_LOGS_PER_SITE = 2_000
+        const val REQUEST_LOG_PAGE_SIZE = 100
+        private const val DATABASE_VERSION = 5
+        private const val MAX_REQUEST_LOG_PATH_CHARS = 2_048
+        private const val MAX_REQUEST_LOG_ERROR_CHARS = 300
+        private const val REQUEST_LOG_SUMMARY_WINDOW_MS = 24L * 60 * 60 * 1000
         private const val PREFERENCES_NAME = "local-hosting-preferences"
         private const val PREF_LAN_SHARING = "lan-sharing-enabled"
         private const val PREF_KEEP_CPU_AWAKE = "keep-cpu-awake-while-hosting"
         private val LOCAL_HOST_LABEL = Regex("[a-z0-9](?:[a-z0-9-]{0,58}[a-z0-9])?")
         private val DEPLOYMENT_COLUMNS = arrayOf(
             "id", "site_id", "repository", "ref", "commit_sha", "backup_file", "status", "created_at",
+        )
+        private val REQUEST_LOG_COLUMNS = arrayOf(
+            "id", "site_id", "method", "path", "status_code", "response_bytes", "error_message", "created_at",
         )
     }
 }

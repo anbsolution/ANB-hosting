@@ -52,6 +52,70 @@ class LocalStaticServerTest {
         assertEquals("GET /s/${site.slug}/ → 200", accessLog.detail)
         assertFalse(accessLog.detail.contains("must-not-be-logged"))
         assertEquals(site.root.resolve("index.html").length(), store.trafficLast30Days(site.id))
+        val requestLogs = store.httpRequestLogs(site.id)
+        assertEquals(2, requestLogs.size)
+        assertEquals("HEAD", requestLogs.first().method)
+        assertEquals(0L, requestLogs.first().responseBytes)
+        assertEquals(site.root.resolve("index.html").length(), requestLogs.last().responseBytes)
+        assertFalse(requestLogs.last().path.contains("must-not-be-logged"))
+    }
+
+    @Test
+    fun recordsRealPerWebsiteRequestsAndFiltersErrorsWithoutQueryStrings() {
+        val site = store.createSite("Request logging")
+        val unrelatedSite = store.createSite("Unrelated logging")
+        store.setSiteStatus(site.id, LocalHostingStore.STATUS_ACTIVE)
+        server = LocalStaticServer(context, store).also { it.start(allowLan = false) }
+
+        request("/s/${site.slug}/?session=private-value")
+        request("/s/${site.slug}/missing.html?session=private-value")
+
+        val logs = store.httpRequestLogs(site.id)
+        assertEquals(2, logs.size)
+        val failure = logs.first()
+        assertEquals("GET", failure.method)
+        assertEquals("/s/${site.slug}/missing.html", failure.path)
+        assertEquals(404, failure.statusCode)
+        assertTrue(failure.isError)
+        assertFalse(failure.path.contains("private-value"))
+        assertEquals(1, store.httpRequestLogs(site.id, errorsOnly = true).size)
+        assertTrue(store.httpRequestLogs(unrelatedSite.id).isEmpty())
+        assertEquals(2L, store.httpRequestSummary(site.id).requestsLast24Hours)
+        assertEquals(1L, store.httpRequestSummary(site.id).errorsLast24Hours)
+        assertTrue(store.requestLogsCsv(site.id).contains("/s/${site.slug}/missing.html"))
+        assertFalse(store.requestLogsCsv(site.id).contains("private-value"))
+    }
+
+    @Test
+    fun requestLogCsvEscapesCellsAndProtectsSpreadsheetFormulas() {
+        val site = store.createSite("CSV logging")
+        store.recordHttpRequest(
+            siteId = site.id,
+            method = "GET",
+            path = "/a,\"b\"",
+            statusCode = 500,
+            responseBytes = 0,
+            errorMessage = "=SUM(1,2)",
+        )
+
+        val csv = store.requestLogsCsv(site.id)
+        assertTrue(csv.contains("\"/a,\"\"b\"\"\""))
+        assertTrue(csv.contains("\"'=SUM(1,2)\""))
+    }
+
+    @Test
+    fun keepsOnlyTheNewestBoundedRequestHistoryPerWebsite() {
+        val site = store.createSite("Bounded logs")
+        repeat(LocalHostingStore.MAX_REQUEST_LOGS_PER_SITE + 1) { index ->
+            store.recordHttpRequest(site.id, "GET", "/$index", 200, 1, null)
+        }
+
+        val retained = store.httpRequestLogs(site.id, limit = LocalHostingStore.MAX_REQUEST_LOGS_PER_SITE)
+        assertEquals(LocalHostingStore.MAX_REQUEST_LOGS_PER_SITE, retained.size)
+        assertEquals("/${LocalHostingStore.MAX_REQUEST_LOGS_PER_SITE}", retained.first().path)
+        assertEquals("/1", retained.last().path)
+        store.deleteSite(site.id)
+        assertTrue(store.httpRequestLogs(site.id).isEmpty())
     }
 
     @Test

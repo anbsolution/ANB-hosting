@@ -108,8 +108,9 @@ internal fun LocalHostingScreen(
     var busy by remember { mutableStateOf(false) }
     var phoneAddress by remember { mutableStateOf(LocalNetwork.wifiIpv4Address(context)?.hostAddress) }
     var managedSite by remember { mutableStateOf<LocalSite?>(null) }
+    var logsSite by remember { mutableStateOf<LocalSite?>(null) }
 
-    BackHandler(enabled = managedSite == null, onBack = onBack)
+    BackHandler(enabled = managedSite == null && logsSite == null, onBack = onBack)
 
     fun reload() {
         scope.launch {
@@ -305,6 +306,12 @@ internal fun LocalHostingScreen(
                     manager = fileManager,
                     site = selectedSite,
                     onBack = { managedSite = null; reload() },
+                )
+            } else if (logsSite != null) {
+                LocalWebsiteLogsScreen(
+                    store = store,
+                    site = requireNotNull(logsSite),
+                    onBack = { logsSite = null; reload() },
                 )
             } else Column(Modifier.fillMaxSize()) {
                 Column(Modifier.fillMaxWidth().background(LocalNavy).padding(20.dp)) {
@@ -511,6 +518,7 @@ internal fun LocalHostingScreen(
                                 }
                                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                     OutlinedButton(onClick = { managedSite = site }, enabled = !busy) { Text("Files") }
+                                    OutlinedButton(onClick = { logsSite = site }, enabled = !busy) { Text("Logs") }
                                     TextButton(onClick = { pendingDelete = site }, enabled = !busy) {
                                         Text("Delete website", color = Color(0xFFB42318))
                                     }

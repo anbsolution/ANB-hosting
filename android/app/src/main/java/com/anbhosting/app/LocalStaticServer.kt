@@ -269,6 +269,18 @@ class LocalStaticServer(private val context: Context, private val store: LocalHo
                         val detail = "${requestMethod.ifBlank { "UNKNOWN" }} $requestPath → $status" +
                             failureMessage?.takeIf(String::isNotBlank)?.let { " (${it.take(160)})" }.orEmpty()
                         runCatching { store.recordEvent(requestSiteId, action, detail) }
+                        requestSiteId?.let { siteId ->
+                            runCatching {
+                                store.recordHttpRequest(
+                                    siteId = siteId,
+                                    method = requestMethod.ifBlank { "UNKNOWN" },
+                                    path = requestPath,
+                                    statusCode = responseStatus,
+                                    responseBytes = responseBytes,
+                                    errorMessage = failureMessage,
+                                )
+                            }
+                        }
                         if (requestSiteId != null && responseStatus in 200..206 && responseBytes > 0) {
                             runCatching { store.recordTraffic(requestSiteId!!, responseBytes) }
                         }
