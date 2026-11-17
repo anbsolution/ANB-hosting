@@ -58,7 +58,7 @@ class IsolatedRuntimeWorkerServiceTest {
             bound = context.bindIsolatedService(
                 Intent(context, IsolatedRuntimeWorkerService::class.java),
                 Context.BIND_AUTO_CREATE,
-                "site-${UUID.randomUUID()}",
+                "site${UUID.randomUUID().toString().replace("-", "")}",
                 connectionExecutor,
                 connection,
             )
