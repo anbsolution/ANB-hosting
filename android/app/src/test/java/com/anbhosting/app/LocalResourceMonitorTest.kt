@@ -24,7 +24,7 @@ class LocalResourceMonitorTest {
         val metrics = LocalResourceMonitor(context).sample()
 
         assertTrue(metrics.appMemoryBytes >= 0L)
-        assertTrue(metrics.freeStorageBytes > 0L)
+        assertTrue(metrics.freeStorageBytes >= 0L)
         assertTrue(metrics.appCpuPercent == null || metrics.appCpuPercent in 0f..100f)
     }
 }

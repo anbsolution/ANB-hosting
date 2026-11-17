@@ -72,8 +72,9 @@ jobs:
 
       - name: Download and verify official CPython Android packages
         shell: bash
+        env:
+          CROSS_BUILD_DIR: ${{ runner.temp }}/anb-cpython-cross-build
         run: |
-          CROSS_BUILD_DIR="$RUNNER_TEMP/anb-cpython-cross-build"
           mkdir -p "$CROSS_BUILD_DIR/aarch64-linux-android" "$CROSS_BUILD_DIR/x86_64-linux-android"
           curl --fail --location --retry 3 --output "$RUNNER_TEMP/python-3.14.10-aarch64-linux-android.tar.gz" \
             https://www.python.org/ftp/python/3.14.10/python-3.14.10-aarch64-linux-android.tar.gz
@@ -95,6 +96,8 @@ jobs:
 
       - name: Smoke-test CPython on a managed Android emulator
         shell: bash
+        env:
+          CROSS_BUILD_DIR: ${{ runner.temp }}/anb-cpython-cross-build
         run: >-
           python3 cpython/Android/android.py test --managed maxVersion --
           -c 'import socket, sqlite3, ssl, sys; assert sys.version_info[:2] == (3, 14); assert socket.socket; assert sqlite3.sqlite_version; assert ssl.OPENSSL_VERSION; print("CPython Android embedding smoke test passed")'
