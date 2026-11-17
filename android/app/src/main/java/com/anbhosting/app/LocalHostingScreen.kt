@@ -2,6 +2,7 @@ package com.anbhosting.app
 
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.provider.Settings
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
@@ -81,6 +82,8 @@ internal fun LocalHostingScreen(
     onOpenPreview: (String) -> Unit,
 ) {
     val context = LocalContext.current
+    val pythonRuntimeSupported = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+        Build.SUPPORTED_ABIS.any { it == "arm64-v8a" || it == "x86_64" }
     val scope = rememberCoroutineScope()
     val fileManager = remember(store) { LocalFileManager(store) }
     val databaseManager = remember(context.applicationContext, store) {
@@ -103,6 +106,7 @@ internal fun LocalHostingScreen(
     var siteSort by remember { mutableStateOf("Newest") }
     var sortMenuExpanded by remember { mutableStateOf(false) }
     var siteName by remember { mutableStateOf("") }
+    var siteRuntime by remember { mutableStateOf(LocalHostingStore.RUNTIME_STATIC) }
     var showCreate by remember { mutableStateOf(false) }
     var showGithubDeployment by remember { mutableStateOf(false) }
     var githubRepositoryUrl by remember { mutableStateOf("") }
@@ -413,6 +417,7 @@ internal fun LocalHostingScreen(
                                     siteSearch = ""
                                     siteStatusFilter = "All"
                                     siteName = ""
+                                    siteRuntime = LocalHostingStore.RUNTIME_STATIC
                                     showCreate = true
                                 },
                                 shape = RoundedCornerShape(16.dp),
@@ -532,6 +537,11 @@ internal fun LocalHostingScreen(
                                     Column(Modifier.weight(1f)) {
                                         Text(site.name, color = LocalNavy, fontWeight = FontWeight.Bold, fontSize = 16.sp)
                                         Text(site.slug, color = LocalMuted, fontSize = 12.sp)
+                                        Text(
+                                            if (site.runtime == LocalHostingStore.RUNTIME_PYTHON) "Python · main.py" else "Static website",
+                                            color = LocalMuted,
+                                            fontSize = 10.sp,
+                                        )
                                         val usage = usageBySite[site.id]
                                         Text(
                                             usage?.let {
@@ -736,23 +746,53 @@ internal fun LocalHostingScreen(
             onDismissRequest = { showCreate = false },
             title = { Text("Create local website") },
             text = {
-                OutlinedTextField(
-                    value = siteName,
-                    onValueChange = { if (it.length <= 80) siteName = it },
-                    label = { Text("Website name") },
-                    singleLine = true,
-                )
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OutlinedTextField(
+                        value = siteName,
+                        onValueChange = { if (it.length <= 80) siteName = it },
+                        label = { Text("Website name") },
+                        singleLine = true,
+                    )
+                    Text("Choose a runtime", color = LocalNavy, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterChip(
+                            selected = siteRuntime == LocalHostingStore.RUNTIME_STATIC,
+                            onClick = { siteRuntime = LocalHostingStore.RUNTIME_STATIC },
+                            label = { Text("Static") },
+                        )
+                        FilterChip(
+                            selected = siteRuntime == LocalHostingStore.RUNTIME_PYTHON,
+                            onClick = { siteRuntime = LocalHostingStore.RUNTIME_PYTHON },
+                            enabled = pythonRuntimeSupported,
+                            label = { Text("Python") },
+                        )
+                    }
+                    Text(
+                        if (siteRuntime == LocalHostingStore.RUNTIME_PYTHON) {
+                            "Python runs main.py for local GET and HEAD requests, with up to ${IsolatedPythonRuntimePool.MAX_ISOLATED_WORKERS} active sites."
+                        } else if (!pythonRuntimeSupported) {
+                            "Python requires Android 10 or newer and an arm64 or x86_64 device."
+                        } else {
+                            "Static sites serve HTML, CSS, JavaScript, and media files."
+                        },
+                        color = LocalMuted,
+                        fontSize = 12.sp,
+                    )
+                }
             },
             confirmButton = {
                 TextButton(
                     onClick = {
+                        val requestedName = siteName
+                        val requestedRuntime = siteRuntime
                         scope.launch {
                             busy = true
                             error = ""
                             try {
-                                withContext(Dispatchers.IO) { store.createSite(siteName) }
+                                withContext(Dispatchers.IO) { store.createSite(requestedName, requestedRuntime) }
                                 showCreate = false
                                 siteName = ""
+                                siteRuntime = LocalHostingStore.RUNTIME_STATIC
                                 siteSearch = ""
                                 siteStatusFilter = "All"
                                 reload()

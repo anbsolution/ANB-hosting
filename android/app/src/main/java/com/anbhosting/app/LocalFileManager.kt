@@ -83,7 +83,7 @@ class LocalFileManager(private val store: LocalHostingStore) {
         val root = siteRoot(siteId)
         val file = resolve(root, relativePath)
         require(file != root) { "Choose a file name." }
-        require(isTextFile(file.name)) { "Use an HTML, CSS, JavaScript, JSON, XML, or text file." }
+        require(isTextFile(file.name)) { "Use an HTML, CSS, JavaScript, Python, JSON, XML, or text file." }
         val bytes = contents.toByteArray(Charsets.UTF_8)
         require(bytes.size <= MAX_TEXT_BYTES) { "Text files are limited to 1 MiB." }
         check(file.parentFile?.isDirectory == true) { "The parent folder does not exist." }
@@ -442,6 +442,6 @@ class LocalFileManager(private val store: LocalHostingStore) {
         private const val MAX_IMPORT_BYTES = 100 * 1024 * 1024L
         private const val MAX_ARCHIVE_BYTES = 200 * 1024 * 1024L
         private const val MAX_ARCHIVE_ENTRIES = 5_000
-        private val TEXT_EXTENSIONS = setOf("html", "htm", "css", "js", "mjs", "json", "txt", "xml", "svg", "md", "yml", "yaml")
+        private val TEXT_EXTENSIONS = setOf("html", "htm", "css", "js", "mjs", "py", "json", "txt", "xml", "svg", "md", "yml", "yaml")
     }
 }

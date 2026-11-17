@@ -169,7 +169,7 @@ internal fun LocalFileManagerScreen(
         Surface(Modifier.fillMaxSize(), color = Color(0xFFF4F6FB)) {
             Column(Modifier.fillMaxSize()) {
                 LocalHeroHeader(
-                    eyebrow = if (editingPath != null) "HTML · CSS · JAVASCRIPT EDITOR" else "WEBSITE MANAGEMENT",
+                    eyebrow = if (editingPath != null) "WEBSITE CODE EDITOR" else "WEBSITE MANAGEMENT",
                     title = if (editingPath != null) "Edit website file" else site.name,
                     subtitle = editingPath ?: currentDirectory.ifBlank { "Website root · files stay on this phone" },
                     backLabel = if (editingPath != null || currentDirectory.isNotBlank()) "Back" else "Websites",
@@ -197,7 +197,7 @@ internal fun LocalFileManagerScreen(
 
                 if (editingPath != null) {
                     Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Text("HTML · CSS · JavaScript · JSON · text", color = LocalMuted, fontSize = 11.sp)
+                        Text("HTML · CSS · JavaScript · Python · JSON · text", color = LocalMuted, fontSize = 11.sp)
                         OutlinedTextField(
                             value = editorContents,
                             onValueChange = { editorContents = it },

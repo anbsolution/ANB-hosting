@@ -14,6 +14,7 @@ data class LocalSite(
     val name: String,
     val slug: String,
     val status: String,
+    val runtime: String,
     val createdAt: Long,
     val root: File,
 ) {
@@ -81,6 +82,7 @@ class LocalHostingStore(context: Context) : SQLiteOpenHelper(
                 name TEXT NOT NULL,
                 slug TEXT NOT NULL UNIQUE,
                 status TEXT NOT NULL,
+                runtime TEXT NOT NULL DEFAULT 'STATIC',
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL
             )""".trimIndent(),
@@ -106,13 +108,16 @@ class LocalHostingStore(context: Context) : SQLiteOpenHelper(
         if (oldVersion < 3) createDeploymentTable(db)
         if (oldVersion < 4) createLocalHostAliasTable(db)
         if (oldVersion < 5) createHttpRequestLogTable(db)
+        if (oldVersion < 6 && tableExists(db, "sites")) {
+            db.execSQL("ALTER TABLE sites ADD COLUMN runtime TEXT NOT NULL DEFAULT 'STATIC'")
+        }
     }
 
     fun listSites(): List<LocalSite> {
         val result = mutableListOf<LocalSite>()
         readableDatabase.query(
             "sites",
-            arrayOf("id", "name", "slug", "status", "created_at"),
+            arrayOf("id", "name", "slug", "status", "created_at", "runtime"),
             null,
             null,
             null,
@@ -126,7 +131,7 @@ class LocalHostingStore(context: Context) : SQLiteOpenHelper(
 
     fun findSiteBySlug(slug: String): LocalSite? = readableDatabase.query(
         "sites",
-        arrayOf("id", "name", "slug", "status", "created_at"),
+        arrayOf("id", "name", "slug", "status", "created_at", "runtime"),
         "slug = ?",
         arrayOf(slug),
         null,
@@ -137,7 +142,7 @@ class LocalHostingStore(context: Context) : SQLiteOpenHelper(
 
     fun findSite(id: String): LocalSite? = readableDatabase.query(
         "sites",
-        arrayOf("id", "name", "slug", "status", "created_at"),
+        arrayOf("id", "name", "slug", "status", "created_at", "runtime"),
         "id = ?",
         arrayOf(id),
         null,
@@ -146,9 +151,10 @@ class LocalHostingStore(context: Context) : SQLiteOpenHelper(
         "1",
     ).use { cursor -> if (cursor.moveToFirst()) cursor.toLocalSite() else null }
 
-    fun createSite(rawName: String): LocalSite {
+    fun createSite(rawName: String, runtime: String = RUNTIME_STATIC): LocalSite {
         val name = rawName.trim()
         require(name.length in 2..80) { "Website name must be 2 to 80 characters." }
+        require(runtime == RUNTIME_STATIC || runtime == RUNTIME_PYTHON) { "Choose a supported website runtime." }
         check(sitesDirectory.exists() || sitesDirectory.mkdirs()) { "Website storage could not be created." }
 
         val base = name.lowercase()
@@ -169,21 +175,35 @@ class LocalHostingStore(context: Context) : SQLiteOpenHelper(
         try {
             val safeName = name.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
                 .replace("\"", "&quot;").replace("'", "&#39;")
-            File(root, "index.html").writeText(
-                """<!doctype html>
+            if (runtime == RUNTIME_PYTHON) {
+                File(root, "main.py").writeText(
+                    """def handle_request(request):
+    return {
+        "status": 200,
+        "content_type": "text/html; charset=utf-8",
+        "body": "<!doctype html><html><body><h1>Hello from Python</h1><p>Path: " + request["path"] + "</p></body></html>",
+    }
+""".trimIndent(),
+                    Charsets.UTF_8,
+                )
+            } else {
+                File(root, "index.html").writeText(
+                    """<!doctype html>
 <html lang="en">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>$safeName</title></head>
 <body><main><h1>$safeName</h1><p>This starter page is ready for local preview.</p></main></body>
 </html>
 """.trimIndent(),
-                Charsets.UTF_8,
-            )
+                    Charsets.UTF_8,
+                )
+            }
             val now = System.currentTimeMillis()
             val values = ContentValues().apply {
                 put("id", id)
                 put("name", name)
                 put("slug", slug)
                 put("status", STATUS_STOPPED)
+                put("runtime", runtime)
                 put("created_at", now)
                 put("updated_at", now)
             }
@@ -191,7 +211,7 @@ class LocalHostingStore(context: Context) : SQLiteOpenHelper(
                 "Website could not be saved."
             }
             recordEvent(id, "website.created", name)
-            return LocalSite(id, name, slug, STATUS_STOPPED, now, root)
+            return LocalSite(id, name, slug, STATUS_STOPPED, runtime, now, root)
         } catch (error: Exception) {
             root.deleteRecursively()
             throw error
@@ -338,7 +358,7 @@ class LocalHostingStore(context: Context) : SQLiteOpenHelper(
 
         findSiteBySlug(label)?.let { return it }
         return readableDatabase.rawQuery(
-            """SELECT sites.id, sites.name, sites.slug, sites.status, sites.created_at
+            """SELECT sites.id, sites.name, sites.slug, sites.status, sites.created_at, sites.runtime
                 FROM local_host_aliases
                 JOIN sites ON sites.id = local_host_aliases.site_id
                 WHERE local_host_aliases.hostname = ?
@@ -673,10 +693,16 @@ class LocalHostingStore(context: Context) : SQLiteOpenHelper(
             name = getString(1),
             slug = slug,
             status = getString(3),
+            runtime = getString(5),
             createdAt = getLong(4),
             root = siteRoot(slug),
         )
     }
+
+    private fun tableExists(db: SQLiteDatabase, name: String): Boolean = db.rawQuery(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1",
+        arrayOf(name),
+    ).use { it.moveToFirst() }
 
     private fun android.database.Cursor.toLocalDeployment(): LocalDeployment = LocalDeployment(
         id = getString(0),
@@ -749,12 +775,14 @@ class LocalHostingStore(context: Context) : SQLiteOpenHelper(
     companion object {
         const val STATUS_ACTIVE = "ACTIVE"
         const val STATUS_STOPPED = "STOPPED"
+        const val RUNTIME_STATIC = "STATIC"
+        const val RUNTIME_PYTHON = "PYTHON"
         const val DEPLOYMENT_APPLIED = "APPLIED"
         const val DEPLOYMENT_ROLLED_BACK = "ROLLED_BACK"
         private const val DATABASE_NAME = "anb-local-hosting.db"
         const val MAX_REQUEST_LOGS_PER_SITE = 2_000
         const val REQUEST_LOG_PAGE_SIZE = 100
-        private const val DATABASE_VERSION = 5
+        private const val DATABASE_VERSION = 6
         private const val MAX_REQUEST_LOG_PATH_CHARS = 2_048
         private const val MAX_REQUEST_LOG_ERROR_CHARS = 300
         private const val REQUEST_LOG_SUMMARY_WINDOW_MS = 24L * 60 * 60 * 1000

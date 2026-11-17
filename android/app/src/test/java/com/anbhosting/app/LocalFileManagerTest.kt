@@ -61,6 +61,15 @@ class LocalFileManagerTest {
     }
 
     @Test
+    fun editsPythonHandlerSourceFiles() {
+        val source = "def handle_request(request):\n    return {'body': request['path']}\n"
+
+        files.writeText(site.id, "main.py", source)
+
+        assertEquals(source, files.readText(site.id, "main.py"))
+    }
+
+    @Test
     fun backupRestoreReplacesSiteContentsAndRejectsInvalidBackup() {
         files.writeText(site.id, "index.html", "<h1>Before backup</h1>")
         files.writeText(site.id, "extra.txt", "Keep in backup")
@@ -131,12 +140,27 @@ class LocalFileManagerTest {
             context.getDatabasePath("anb-local-hosting.db").also { it.parentFile?.mkdirs() },
             null,
         )
+        database.execSQL(
+            """CREATE TABLE sites (
+                id TEXT PRIMARY KEY NOT NULL,
+                name TEXT NOT NULL,
+                slug TEXT NOT NULL UNIQUE,
+                status TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            )""".trimIndent(),
+        )
+        database.execSQL(
+            "INSERT INTO sites (id, name, slug, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+            arrayOf("legacy-site", "Legacy", "legacy-site", LocalHostingStore.STATUS_STOPPED, 1L, 1L),
+        )
         database.version = 1
         database.close()
 
         store = LocalHostingStore(context)
         store.recordTraffic("legacy-site", 1536)
 
+        assertEquals(LocalHostingStore.RUNTIME_STATIC, store.findSite("legacy-site")?.runtime)
         assertEquals(1536L, store.trafficLast30Days("legacy-site"))
         assertTrue(store.deploymentHistory("legacy-site").isEmpty())
     }

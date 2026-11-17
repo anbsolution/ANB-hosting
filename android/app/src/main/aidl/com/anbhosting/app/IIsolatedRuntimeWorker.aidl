@@ -2,7 +2,7 @@ package com.anbhosting.app;
 
 import android.os.ParcelFileDescriptor;
 
-/** Narrow diagnostics and file-descriptor probe used before enabling site code. */
+/** Isolated CPython worker contract for bounded local HTTP handlers. */
 interface IIsolatedRuntimeWorker {
     int getProcessUid();
     String readGrantedFile(in ParcelFileDescriptor file);

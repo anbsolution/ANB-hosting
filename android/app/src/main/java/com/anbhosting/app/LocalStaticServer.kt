@@ -22,9 +22,10 @@ import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.ConcurrentHashMap
 
-/** Read-only HTTP server for app-owned static website files. */
+/** Local HTTP server for app-owned static files and isolated Python handlers. */
 class LocalStaticServer(private val context: Context, private val store: LocalHostingStore) {
     @Volatile private var sockets: List<ServerSocket> = emptyList()
+    @Volatile private var pythonRuntimePool: IsolatedPythonRuntimePool? = null
     private var acceptExecutors: List<ExecutorService> = emptyList()
     private var clientExecutor: ExecutorService? = null
     private val clients = ConcurrentHashMap.newKeySet<Socket>()
@@ -67,6 +68,7 @@ class LocalStaticServer(private val context: Context, private val store: LocalHo
         }
         check(listeners.isNotEmpty()) { "The local website server could not bind to a loopback address." }
         sockets = listeners.toList()
+        pythonRuntimePool = IsolatedPythonRuntimePool(context, store)
         clientExecutor = ThreadPoolExecutor(
             MAX_CLIENTS,
             MAX_CLIENTS,
@@ -90,6 +92,8 @@ class LocalStaticServer(private val context: Context, private val store: LocalHo
         sockets = emptyList()
         clients.toList().forEach { client -> runCatching { client.close() } }
         clients.clear()
+        pythonRuntimePool?.close()
+        pythonRuntimePool = null
         acceptExecutors.forEach { it.shutdownNow() }
         acceptExecutors = emptyList()
         clientExecutor?.shutdownNow()
@@ -208,44 +212,80 @@ class LocalStaticServer(private val context: Context, private val store: LocalHo
                         responseBytes = sendError(connection, 405, "Method Not Allowed", requestMethod == "HEAD")
                         return
                     }
-                    val path = resolveRequestPath(parts[1], localHostname) ?: run {
-                        responseStatus = 400
-                        responseBytes = sendError(connection, 400, "Bad Request", requestMethod == "HEAD")
-                        return
-                    }
-                    when (path) {
-                        ForbiddenPath -> {
-                            responseStatus = 403
-                            responseBytes = sendError(connection, 403, "Forbidden", method == "HEAD")
-                        }
-                        MissingPath -> {
-                            responseStatus = 404
-                            responseBytes = sendError(connection, 404, "Not Found", method == "HEAD")
-                        }
-                        is ResolvedPath -> {
-                            val selectedRange = if (duplicateRangeHeader) {
-                                FullFile
-                            } else {
-                                selectRange(rangeHeader, path.file.length())
+                    val pythonSite = requestSiteId?.let(store::findSite)
+                        ?.takeIf { it.runtime == LocalHostingStore.RUNTIME_PYTHON }
+                    if (pythonSite != null) {
+                        when (val route = resolvePythonRequestPath(pythonSite, parts[1], localHostname)) {
+                            null -> {
+                                responseStatus = 400
+                                responseBytes = sendError(connection, 400, "Bad Request", method == "HEAD")
                             }
-                            when (selectedRange) {
-                                UnsatisfiableRange -> {
-                                    responseStatus = 416
-                                    responseBytes = sendError(
-                                        connection,
-                                        416,
-                                        "Range Not Satisfiable",
-                                        method == "HEAD",
-                                        listOf("Accept-Ranges: bytes", "Content-Range: bytes */${path.file.length()}"),
-                                    )
+                            PythonPathForbidden -> {
+                                responseStatus = 403
+                                responseBytes = sendError(connection, 403, "Forbidden", method == "HEAD")
+                            }
+                            PythonPathMissing -> {
+                                responseStatus = 404
+                                responseBytes = sendError(connection, 404, "Not Found", method == "HEAD")
+                            }
+                            is PythonRequestPath -> try {
+                                val response = pythonRuntimePool?.execute(
+                                    pythonSite,
+                                    method,
+                                    route.path,
+                                    route.query,
+                                    localHostname,
+                                ) ?: throw IOException("The local Python runtime is unavailable.")
+                                responseStatus = response.status
+                                responseBytes = sendPythonResponse(connection, response, method == "HEAD")
+                            } catch (error: Exception) {
+                                responseStatus = 500
+                                failureMessage = error.message.orEmpty()
+                                responseBytes = runCatching {
+                                    sendError(connection, 500, "Internal Server Error", method == "HEAD")
+                                }.getOrDefault(0L)
+                            }
+                        }
+                    } else {
+                        val path = resolveRequestPath(parts[1], localHostname) ?: run {
+                            responseStatus = 400
+                            responseBytes = sendError(connection, 400, "Bad Request", method == "HEAD")
+                            return
+                        }
+                        when (path) {
+                            ForbiddenPath -> {
+                                responseStatus = 403
+                                responseBytes = sendError(connection, 403, "Forbidden", method == "HEAD")
+                            }
+                            MissingPath -> {
+                                responseStatus = 404
+                                responseBytes = sendError(connection, 404, "Not Found", method == "HEAD")
+                            }
+                            is ResolvedPath -> {
+                                val selectedRange = if (duplicateRangeHeader) {
+                                    FullFile
+                                } else {
+                                    selectRange(rangeHeader, path.file.length())
                                 }
-                                FullFile -> {
-                                    responseStatus = 200
-                                    responseBytes = sendFile(connection, path.file, method == "HEAD")
-                                }
-                                is SelectedRange -> {
-                                    responseStatus = 206
-                                    responseBytes = sendFile(connection, path.file, method == "HEAD", selectedRange)
+                                when (selectedRange) {
+                                    UnsatisfiableRange -> {
+                                        responseStatus = 416
+                                        responseBytes = sendError(
+                                            connection,
+                                            416,
+                                            "Range Not Satisfiable",
+                                            method == "HEAD",
+                                            listOf("Accept-Ranges: bytes", "Content-Range: bytes */${path.file.length()}"),
+                                        )
+                                    }
+                                    FullFile -> {
+                                        responseStatus = 200
+                                        responseBytes = sendFile(connection, path.file, method == "HEAD")
+                                    }
+                                    is SelectedRange -> {
+                                        responseStatus = 206
+                                        responseBytes = sendFile(connection, path.file, method == "HEAD", selectedRange)
+                                    }
                                 }
                             }
                         }
@@ -359,6 +399,33 @@ class LocalStaticServer(private val context: Context, private val store: LocalHo
         return if (file.exists()) ResolvedPath(file) else MissingPath
     }
 
+    private fun resolvePythonRequestPath(site: LocalSite, target: String, localHostname: String?): PythonPathResult? {
+        if (site.status != LocalHostingStore.STATUS_ACTIVE) return PythonPathMissing
+        if (!target.startsWith('/') || target.startsWith("//")) return null
+        val rawPath = target.substringBefore('?').substringBefore('#')
+        val rawParts = rawPath.split('/')
+        val relativeParts = if (localHostname != null) {
+            rawParts.drop(1)
+        } else {
+            if (rawParts.size < 3 || rawParts[1] != "s" || decodePathPart(rawParts[2]) != site.slug) {
+                return PythonPathMissing
+            }
+            rawParts.drop(3)
+        }
+        val decodedParts = relativeParts.map { decodePathPart(it) ?: return null }
+        if (decodedParts.any {
+                it == "." || it == ".." || it.contains('/') || it.contains('\\') || it.contains('\u0000')
+            }
+        ) {
+            return PythonPathForbidden
+        }
+        if (decodedParts.any { it.startsWith('.') && it != ".well-known" }) return PythonPathForbidden
+        val path = "/" + decodedParts.filter(String::isNotEmpty).joinToString("/")
+        val normalizedPath = if (rawPath.endsWith('/') && path != "/") "$path/" else path
+        val query = target.substringBefore('#').substringAfter('?', "")
+        return PythonRequestPath(normalizedPath, query)
+    }
+
     private fun decodePathPart(value: String): String? = try {
         URLDecoder.decode(value.replace("+", "%2B"), "UTF-8")
     } catch (_: IllegalArgumentException) {
@@ -422,6 +489,33 @@ class LocalStaticServer(private val context: Context, private val store: LocalHo
         if (!headOnly) output.write(body)
         output.flush()
         return if (headOnly) 0L else body.size.toLong()
+    }
+
+    private fun sendPythonResponse(socket: Socket, response: PythonHttpResponse, headOnly: Boolean): Long {
+        val reason = when (response.status) {
+            200 -> "OK"
+            201 -> "Created"
+            202 -> "Accepted"
+            204 -> "No Content"
+            301 -> "Moved Permanently"
+            302 -> "Found"
+            304 -> "Not Modified"
+            400 -> "Bad Request"
+            401 -> "Unauthorized"
+            403 -> "Forbidden"
+            404 -> "Not Found"
+            405 -> "Method Not Allowed"
+            422 -> "Unprocessable Content"
+            429 -> "Too Many Requests"
+            500 -> "Internal Server Error"
+            503 -> "Service Unavailable"
+            else -> "Python Response"
+        }
+        val output = BufferedOutputStream(socket.getOutputStream())
+        writeHeaders(output, response.status, reason, response.contentType, response.body.size.toLong())
+        if (!headOnly && response.body.isNotEmpty()) output.write(response.body)
+        output.flush()
+        return if (headOnly) 0L else response.body.size.toLong()
     }
 
     private fun writeHeaders(
@@ -495,6 +589,11 @@ class LocalStaticServer(private val context: Context, private val store: LocalHo
     private data class ResolvedPath(val file: File) : PathResult
     private data object ForbiddenPath : PathResult
     private data object MissingPath : PathResult
+
+    private sealed interface PythonPathResult
+    private data class PythonRequestPath(val path: String, val query: String) : PythonPathResult
+    private data object PythonPathForbidden : PythonPathResult
+    private data object PythonPathMissing : PythonPathResult
 
     private sealed interface ByteRangeResult
     private data object FullFile : ByteRangeResult
