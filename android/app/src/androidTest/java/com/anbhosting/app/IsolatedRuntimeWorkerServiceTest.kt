@@ -8,6 +8,7 @@ import android.os.Build
 import android.os.IBinder
 import android.os.ParcelFileDescriptor
 import android.os.Process
+import android.util.Log
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Assert.assertEquals
@@ -80,9 +81,12 @@ class IsolatedRuntimeWorkerServiceTest {
             )
 
             runtimePrefixDescriptor = BundledPythonRuntime.openRuntimePrefix(context)
+            Log.i("IsolatedRuntimeTest", "starting CPython with explicitly granted prefix descriptor")
             val pythonVersion = worker.startPythonRuntime(requireNotNull(runtimePrefixDescriptor))
+            Log.i("IsolatedRuntimeTest", "isolated CPython started: $pythonVersion")
             assertTrue("Unexpected isolated CPython version: $pythonVersion", pythonVersion.contains("3.14.10"))
 
+            Log.i("IsolatedRuntimeTest", "executing isolated Python handler")
             val response = JSONObject(
                 worker.executePythonHandler(
                     "def handle_request(request):\n" +
@@ -93,6 +97,7 @@ class IsolatedRuntimeWorkerServiceTest {
             assertEquals(200, response.getInt("status"))
             assertEquals("offline /café", response.getString("body"))
 
+            Log.i("IsolatedRuntimeTest", "checking isolated Python invocation state")
             val secondResponse = JSONObject(
                 worker.executePythonHandler(
                     "def handle_request(request):\n" +
@@ -102,6 +107,7 @@ class IsolatedRuntimeWorkerServiceTest {
             )
             assertEquals("fresh invocation", secondResponse.getString("body"))
 
+            Log.i("IsolatedRuntimeTest", "checking isolated Python syntax error response")
             val failedResponse = JSONObject(
                 worker.executePythonHandler("def handle_request(:\n    pass\n", "{}"),
             )

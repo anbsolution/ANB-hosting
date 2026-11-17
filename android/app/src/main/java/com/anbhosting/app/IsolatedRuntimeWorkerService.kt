@@ -6,6 +6,7 @@ import android.os.IBinder
 import android.os.ParcelFileDescriptor
 import android.os.Process
 import android.os.Build
+import android.util.Log
 import java.io.File
 import java.nio.charset.StandardCharsets
 
@@ -27,6 +28,7 @@ class IsolatedRuntimeWorkerService : Service() {
             File(filesDir, PRIVATE_STORAGE_PROBE).canRead()
 
         override fun startPythonRuntime(runtimePrefixFile: ParcelFileDescriptor): String = synchronized(runtimeLock) {
+            Log.i(TAG, "CPython start requested")
             check(Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 "Isolated Python execution requires Android 10 or newer."
             }
@@ -40,10 +42,13 @@ class IsolatedRuntimeWorkerService : Service() {
                 runtimePrefixFile.close()
             }
             try {
+                Log.i(TAG, "initializing CPython from the granted prefix descriptor")
                 val version = BundledPythonRuntime.initializeIsolatedRuntime(retainedPrefix.fd)
                 runtimePrefix = retainedPrefix
+                Log.i(TAG, "CPython initialized: $version")
                 "CPython $version"
             } catch (error: Exception) {
+                Log.e(TAG, "CPython initialization failed", error)
                 retainedPrefix.close()
                 throw error
             }
@@ -77,6 +82,7 @@ class IsolatedRuntimeWorkerService : Service() {
 
     companion object {
         const val PRIVATE_STORAGE_PROBE = "isolated-worker-access-probe"
+        private const val TAG = "AnbIsolatedRuntime"
         private const val MAX_PYTHON_SOURCE_BYTES = 256 * 1024
         private const val MAX_REQUEST_JSON_BYTES = 64 * 1024
         private const val MAX_RESPONSE_JSON_BYTES = 256 * 1024
