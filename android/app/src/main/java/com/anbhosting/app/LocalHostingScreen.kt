@@ -25,6 +25,9 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -91,6 +94,10 @@ internal fun LocalHostingScreen(
     var aliasesBySite by remember { mutableStateOf(emptyMap<String, List<LocalHostAlias>>()) }
     var allowLan by remember { mutableStateOf(store.isLanSharingEnabled()) }
     var keepCpuAwake by remember { mutableStateOf(store.isKeepCpuAwakeEnabled()) }
+    var siteSearch by remember { mutableStateOf("") }
+    var siteStatusFilter by remember { mutableStateOf("All") }
+    var siteSort by remember { mutableStateOf("Newest") }
+    var sortMenuExpanded by remember { mutableStateOf(false) }
     var siteName by remember { mutableStateOf("") }
     var showCreate by remember { mutableStateOf(false) }
     var showGithubDeployment by remember { mutableStateOf(false) }
@@ -146,6 +153,26 @@ internal fun LocalHostingScreen(
     }
 
     LaunchedEffect(Unit) { reload() }
+
+    val matchingSites = sites.filter { site ->
+        val matchesSearch = siteSearch.isBlank() || listOf(site.name, site.slug, site.localHostname)
+            .any { it.contains(siteSearch.trim(), ignoreCase = true) }
+        val matchesStatus = when (siteStatusFilter) {
+            "Running" -> site.status == LocalHostingStore.STATUS_ACTIVE
+            "Stopped" -> site.status == LocalHostingStore.STATUS_STOPPED
+            else -> true
+        }
+        matchesSearch && matchesStatus
+    }
+    val visibleSites = when (siteSort) {
+        "Oldest" -> matchingSites.sortedBy { it.createdAt }
+        "Name A–Z" -> matchingSites.sortedBy { it.name.lowercase() }
+        "Running first" -> matchingSites.sortedWith(
+            compareBy<LocalSite> { it.status != LocalHostingStore.STATUS_ACTIVE }
+                .thenByDescending { it.createdAt },
+        )
+        else -> matchingSites.sortedByDescending { it.createdAt }
+    }
 
     fun startSite(site: LocalSite) {
         onRequestHostingPermission(
@@ -236,6 +263,8 @@ internal fun LocalHostingScreen(
                 githubPublishDirectory = ""
                 githubRef = ""
                 targetSiteId = null
+                siteSearch = ""
+                siteStatusFilter = "All"
                 reload()
                 startSite(deployedSite)
             } catch (failure: Exception) {
@@ -345,10 +374,24 @@ internal fun LocalHostingScreen(
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Column(Modifier.weight(1f)) {
                                 Text("Local websites", color = LocalNavy, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                                Text("${sites.size} saved · ${sites.count { it.status == LocalHostingStore.STATUS_ACTIVE }} running", color = LocalMuted, fontSize = 12.sp)
+                                val runningCount = sites.count { it.status == LocalHostingStore.STATUS_ACTIVE }
+                                Text(
+                                    if (siteSearch.isBlank() && siteStatusFilter == "All") {
+                                        "${sites.size} saved · $runningCount running"
+                                    } else {
+                                        "${visibleSites.size} of ${sites.size} sites · $runningCount running"
+                                    },
+                                    color = LocalMuted,
+                                    fontSize = 12.sp,
+                                )
                             }
                             Button(
-                                onClick = { siteName = ""; showCreate = true },
+                                onClick = {
+                                    siteSearch = ""
+                                    siteStatusFilter = "All"
+                                    siteName = ""
+                                    showCreate = true
+                                },
                                 shape = RoundedCornerShape(16.dp),
                             ) { Text("New site") }
                         }
@@ -366,6 +409,53 @@ internal fun LocalHostingScreen(
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(16.dp),
                         ) { Text("Deploy public GitHub site") }
+                    }
+
+                    if (sites.isNotEmpty()) item {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedTextField(
+                                value = siteSearch,
+                                onValueChange = { siteSearch = it.take(80) },
+                                modifier = Modifier.fillMaxWidth(),
+                                label = { Text("Search sites, hostnames") },
+                                singleLine = true,
+                                shape = RoundedCornerShape(16.dp),
+                                trailingIcon = {
+                                    if (siteSearch.isNotBlank()) {
+                                        TextButton(onClick = { siteSearch = "" }) { Text("Clear") }
+                                    }
+                                },
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                listOf("All", "Running", "Stopped").forEach { filter ->
+                                    FilterChip(
+                                        selected = siteStatusFilter == filter,
+                                        onClick = { siteStatusFilter = filter },
+                                        label = { Text(filter, maxLines = 1) },
+                                        shape = RoundedCornerShape(14.dp),
+                                    )
+                                }
+                            }
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                                Box {
+                                    TextButton(onClick = { sortMenuExpanded = true }) { Text("Sort · $siteSort") }
+                                    DropdownMenu(
+                                        expanded = sortMenuExpanded,
+                                        onDismissRequest = { sortMenuExpanded = false },
+                                    ) {
+                                        listOf("Newest", "Oldest", "Name A–Z", "Running first").forEach { option ->
+                                            DropdownMenuItem(
+                                                text = { Text(option) },
+                                                onClick = {
+                                                    siteSort = option
+                                                    sortMenuExpanded = false
+                                                },
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
 
                     if (error.isNotBlank()) item {
@@ -387,7 +477,26 @@ internal fun LocalHostingScreen(
                         }
                     }
 
-                    items(sites, key = { it.id }) { site ->
+                    if (sites.isNotEmpty() && visibleSites.isEmpty()) item {
+                        LocalPremiumCard {
+                            Column(
+                                Modifier.fillMaxWidth().padding(20.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(6.dp),
+                            ) {
+                                Text("No matching websites", color = LocalNavy, fontWeight = FontWeight.Bold)
+                                Text("Try another search or status filter.", color = LocalMuted, fontSize = 12.sp)
+                                TextButton(
+                                    onClick = {
+                                        siteSearch = ""
+                                        siteStatusFilter = "All"
+                                    },
+                                ) { Text("Clear search and filters") }
+                            }
+                        }
+                    }
+
+                    items(visibleSites, key = { it.id }) { site ->
                         val deployment = deploymentsBySite[site.id]
                         val siteUrl = if (allowLan && phoneAddress != null) {
                             "http://$phoneAddress:${LocalStaticServer.PORT}/s/${site.slug}/"
@@ -616,6 +725,8 @@ internal fun LocalHostingScreen(
                                 withContext(Dispatchers.IO) { store.createSite(siteName) }
                                 showCreate = false
                                 siteName = ""
+                                siteSearch = ""
+                                siteStatusFilter = "All"
                                 reload()
                             } catch (failure: Exception) {
                                 error = failure.message ?: "Website could not be created."
