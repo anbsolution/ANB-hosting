@@ -2,12 +2,13 @@ package com.anbhosting.app
 
 import android.content.Context
 import android.os.Build
+import android.os.ParcelFileDescriptor
 import java.io.File
 import java.io.FileNotFoundException
 
 /**
- * Installs the checksum-pinned interpreter bundled in the APK and checks that
- * its production Android native modules load. This is not a website execution API.
+ * Installs the checksum-pinned interpreter bundled in the APK. Website code is
+ * executed only by the isolated runtime worker, never in the app process.
  */
 object BundledPythonRuntime {
     const val VERSION = "3.14.10"
@@ -19,8 +20,8 @@ object BundledPythonRuntime {
         System.loadLibrary("anbpython")
     }
 
-    /** Extracts CPython into app-private storage and imports every packaged production extension. */
-    fun verifyBundledRuntime(context: Context): String = synchronized(lock) {
+    /** Installs CPython into app-private storage and returns its runtime prefix directory. */
+    fun installBundledRuntime(context: Context): File = synchronized(lock) {
         val abi = Build.SUPPORTED_ABIS.firstOrNull { it == "arm64-v8a" || it == "x86_64" }
             ?: error("This ANB build does not include a CPython package for this device ABI")
         val runtimeParent = File(context.noBackupFilesDir, "python-runtime/$VERSION")
@@ -43,8 +44,25 @@ object BundledPythonRuntime {
                 throw error
             }
         }
-        nativeSmokeTest(runtimeHome.absolutePath)
+        runtimeHome
     }
+
+    /** Extracts CPython and imports every packaged production extension in this process. */
+    fun verifyBundledRuntime(context: Context): String = nativeSmokeTest(
+        installBundledRuntime(context).absolutePath,
+    )
+
+    /** Opens the installed prefix so Android can grant only this directory to an isolated worker. */
+    fun openRuntimePrefix(context: Context): ParcelFileDescriptor = ParcelFileDescriptor.open(
+        installBundledRuntime(context),
+        ParcelFileDescriptor.MODE_READ_ONLY,
+    )
+
+    internal fun initializeIsolatedRuntime(runtimePrefixFd: Int): String =
+        nativeInitializeIsolatedRuntime(runtimePrefixFd)
+
+    internal fun runIsolatedHandler(source: String, requestJson: String): String =
+        nativeRunIsolatedHandler(source, requestJson)
 
     private fun isUsableRuntime(prefix: File): Boolean =
         runCatching {
@@ -84,4 +102,8 @@ object BundledPythonRuntime {
     }
 
     private external fun nativeSmokeTest(runtimeHome: String): String
+
+    private external fun nativeInitializeIsolatedRuntime(runtimePrefixFd: Int): String
+
+    private external fun nativeRunIsolatedHandler(source: String, requestJson: String): String
 }

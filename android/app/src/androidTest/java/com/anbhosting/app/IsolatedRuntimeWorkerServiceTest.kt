@@ -14,6 +14,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
+import org.json.JSONObject
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
@@ -40,6 +41,7 @@ class IsolatedRuntimeWorkerServiceTest {
         val hiddenPrivateFile = File(context.filesDir, IsolatedRuntimeWorkerService.PRIVATE_STORAGE_PROBE)
         hiddenPrivateFile.writeText("must stay private to the app uid")
         var visibleSiteFileDescriptor: ParcelFileDescriptor? = null
+        var runtimePrefixDescriptor: ParcelFileDescriptor? = null
         var bound = false
 
         val connection = object : ServiceConnection {
@@ -76,9 +78,38 @@ class IsolatedRuntimeWorkerServiceTest {
                 "Worker must not read ANB app-private files by path",
                 worker.privateStorageProbeIsReadable(),
             )
+
+            runtimePrefixDescriptor = BundledPythonRuntime.openRuntimePrefix(context)
+            val pythonVersion = worker.startPythonRuntime(requireNotNull(runtimePrefixDescriptor))
+            assertTrue("Unexpected isolated CPython version: $pythonVersion", pythonVersion.contains("3.14.10"))
+
+            val response = JSONObject(
+                worker.executePythonHandler(
+                    "def handle_request(request):\n" +
+                        "    return {'status': 200, 'body': 'offline ' + request['path']}\n",
+                    "{\"path\":\"/caf\\u00e9\"}",
+                ),
+            )
+            assertEquals(200, response.getInt("status"))
+            assertEquals("offline /café", response.getString("body"))
+
+            val secondResponse = JSONObject(
+                worker.executePythonHandler(
+                    "def handle_request(request):\n" +
+                        "    return {'body': request['value']}\n",
+                    "{\"value\":\"fresh invocation\"}",
+                ),
+            )
+            assertEquals("fresh invocation", secondResponse.getString("body"))
+
+            val failedResponse = JSONObject(
+                worker.executePythonHandler("def handle_request(:\n    pass\n", "{}"),
+            )
+            assertEquals("Python handler execution failed", failedResponse.getString("error"))
         } finally {
             if (bound) context.unbindService(connection)
             visibleSiteFileDescriptor?.close()
+            runtimePrefixDescriptor?.close()
             hiddenPrivateFile.delete()
             siteRoot.deleteRecursively()
             connectionExecutor.shutdownNow()
