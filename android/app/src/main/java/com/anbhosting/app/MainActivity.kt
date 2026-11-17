@@ -1,6 +1,7 @@
 package com.anbhosting.app
 
 import android.Manifest
+import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -106,11 +107,10 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun openPreview(url: String) {
-        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
-        if (intent.resolveActivity(packageManager) == null) {
+        try {
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+        } catch (_: ActivityNotFoundException) {
             Toast.makeText(this, "No browser is available to preview this site.", Toast.LENGTH_LONG).show()
-        } else {
-            startActivity(intent)
         }
     }
 }
