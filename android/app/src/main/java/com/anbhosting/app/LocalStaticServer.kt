@@ -423,9 +423,10 @@ class LocalStaticServer(private val context: Context, private val store: LocalHo
         val headers = "HTTP/1.1 $status $reason\r\n" +
             "Content-Type: $contentType\r\n" +
             "Content-Length: $contentLength\r\n" +
-            additionalHeaders.joinToString(separator = "", postfix = if (additionalHeaders.isEmpty()) "" else "\r\n") {
-                "$it\r\n"
-            } +
+            additionalHeaders.joinToString(
+                separator = "\r\n",
+                postfix = if (additionalHeaders.isEmpty()) "" else "\r\n",
+            ) +
             "Connection: close\r\n" +
             "Cache-Control: no-cache\r\n" +
             "X-Content-Type-Options: nosniff\r\n\r\n"
