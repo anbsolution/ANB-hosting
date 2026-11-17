@@ -28,7 +28,7 @@ import java.util.concurrent.atomic.AtomicReference
 @RunWith(AndroidJUnit4::class)
 class IsolatedRuntimeWorkerServiceTest {
     @Test
-    fun workerHasSeparateUidAndReadsOnlyExplicitlyGrantedFileDescriptor() {
+    fun workerHasSeparateUidAndKeepsAppPrivateFilesInaccessible() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
 
         val context = InstrumentationRegistry.getInstrumentation().targetContext
@@ -42,7 +42,6 @@ class IsolatedRuntimeWorkerServiceTest {
         val hiddenPrivateFile = File(context.filesDir, IsolatedRuntimeWorkerService.PRIVATE_STORAGE_PROBE)
         hiddenPrivateFile.writeText("must stay private to the app uid")
         var visibleSiteFileDescriptor: ParcelFileDescriptor? = null
-        var runtimeArchiveDescriptor: ParcelFileDescriptor? = null
         var bound = false
 
         val connection = object : ServiceConnection {
@@ -83,10 +82,12 @@ class IsolatedRuntimeWorkerServiceTest {
                 remoteStep("checking app-private storage access") { worker.privateStorageProbeIsReadable() },
             )
 
-            runtimeArchiveDescriptor = BundledPythonRuntime.openRuntimeArchive(context)
-            Log.i("IsolatedRuntimeTest", "starting CPython with explicitly granted archive descriptor")
+            val standardLibraryPath = BundledPythonRuntime.isolatedRuntimeStandardLibraryPath(context)
+            Log.i("IsolatedRuntimeTest", "starting CPython from the packaged APK standard-library assets")
             val pythonVersion = remoteStep("starting CPython") {
-                worker.startPythonRuntime(requireNotNull(runtimeArchiveDescriptor))
+                requireNotNull(worker.startPythonRuntime(standardLibraryPath)) {
+                    "Isolated runtime worker returned no CPython startup status"
+                }
             }
             Log.i("IsolatedRuntimeTest", "isolated CPython started: $pythonVersion")
             assertTrue("Unexpected isolated CPython version: $pythonVersion", pythonVersion.contains("3.14.10"))
@@ -126,7 +127,6 @@ class IsolatedRuntimeWorkerServiceTest {
         } finally {
             if (bound) context.unbindService(connection)
             visibleSiteFileDescriptor?.close()
-            runtimeArchiveDescriptor?.close()
             hiddenPrivateFile.delete()
             siteRoot.deleteRecursively()
             connectionExecutor.shutdownNow()

@@ -7,6 +7,6 @@ interface IIsolatedRuntimeWorker {
     int getProcessUid();
     String readGrantedFile(in ParcelFileDescriptor file);
     boolean privateStorageProbeIsReadable();
-    String startPythonRuntime(in ParcelFileDescriptor runtimeArchive);
+    String startPythonRuntime(String standardLibraryPath);
     String executePythonHandler(String source, String requestJson);
 }

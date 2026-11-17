@@ -10,7 +10,6 @@ import shutil
 import tarfile
 import tempfile
 import urllib.request
-import zipfile
 from pathlib import Path, PurePosixPath
 
 
@@ -45,19 +44,6 @@ def ignore_development_extensions(directory: str, names: list[str]) -> set[str]:
         for name in names
         if name.endswith(".so") and is_development_extension(name.split(".", 1)[0])
     }
-
-
-def create_standard_library_archive(python_lib: Path, destination: Path) -> None:
-    """Package pure-Python modules for FD-backed loading by Android isolated UIDs."""
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    # ZIP_STORED lets zipimport boot before any optional native zlib extension is loaded.
-    with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_STORED) as archive:
-        for path in sorted(python_lib.rglob("*")):
-            if not path.is_file() or path.is_relative_to(python_lib / "lib-dynload"):
-                continue
-            if path.suffix in {".pyc", ".pyo", ".so", ".a"}:
-                continue
-            archive.write(path, path.relative_to(python_lib).as_posix())
 
 
 def download_package(abi: str, destination: Path) -> None:
@@ -141,10 +127,6 @@ def stage_abi(abi: str, prefix: Path, output: Path) -> None:
         asset_lib / python_lib.name,
         ignore=ignore_development_extensions,
     )
-    create_standard_library_archive(
-        python_lib,
-        output / "assets" / "python-runtime" / abi / "python-stdlib.zip",
-    )
     for directory in ("engines-3", "ossl-modules"):
         source = prefix / "lib" / directory
         if source.is_dir():
@@ -159,7 +141,7 @@ def main() -> None:
     output = args.output.resolve()
     manifest = output / "manifest.json"
     expected_manifest = {
-        "layout": 5,
+        "layout": 4,
         "version": VERSION,
         "excluded_extension_prefixes": list(DEVELOPMENT_EXTENSION_PREFIXES),
         "packages": {abi: data["sha256"] for abi, data in PACKAGES.items()},

@@ -85,6 +85,8 @@ android {
     androidResources {
         // CPython's standard library relies on many files beginning with underscores.
         ignoreAssetsPattern = "anb-dont-ignore-any-assets"
+        // Python's zip importer in the isolated process reads source files from the APK.
+        noCompress += "py"
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

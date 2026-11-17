@@ -11,8 +11,8 @@ import java.io.File
 import java.nio.charset.StandardCharsets
 
 /**
- * Isolated process foundation for per-site runtimes. It receives only explicit
- * file descriptors; it cannot directly read ANB's app-private files.
+ * Isolated process foundation for per-site runtimes. It can read packaged APK
+ * code assets but cannot directly read ANB's app-private files.
  */
 class IsolatedRuntimeWorkerService : Service() {
     private val runtimeLock = Any()
@@ -27,31 +27,23 @@ class IsolatedRuntimeWorkerService : Service() {
         override fun privateStorageProbeIsReadable(): Boolean =
             File(filesDir, PRIVATE_STORAGE_PROBE).canRead()
 
-        override fun startPythonRuntime(runtimeArchiveFile: ParcelFileDescriptor): String = synchronized(runtimeLock) {
+        override fun startPythonRuntime(standardLibraryPath: String): String = synchronized(runtimeLock) {
             Log.i(TAG, "CPython start requested")
             check(Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 "Isolated Python execution requires Android 10 or newer."
             }
             if (pythonRuntimeStarted) {
-                runtimeArchiveFile.close()
                 return@synchronized "CPython ${BundledPythonRuntime.VERSION}"
             }
-            val retainedArchive = try {
-                ParcelFileDescriptor.dup(runtimeArchiveFile.fileDescriptor)
-            } finally {
-                runtimeArchiveFile.close()
-            }
             try {
-                Log.i(TAG, "initializing CPython from the granted standard-library archive")
-                val version = BundledPythonRuntime.initializeIsolatedRuntime(retainedArchive.fd)
+                Log.i(TAG, "initializing CPython from readable APK standard-library assets")
+                val version = BundledPythonRuntime.initializeIsolatedRuntime(standardLibraryPath)
                 pythonRuntimeStarted = true
                 Log.i(TAG, "CPython initialized: $version")
                 "CPython $version"
             } catch (error: Exception) {
                 Log.e(TAG, "CPython initialization failed", error)
                 throw error
-            } finally {
-                retainedArchive.close()
             }
         }
 
