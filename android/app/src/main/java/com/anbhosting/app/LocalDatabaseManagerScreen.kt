@@ -264,7 +264,6 @@ internal fun LocalDatabaseManagerScreen(
                         }
                     }
                 }
-                item { Column(Modifier.padding(bottom = 12.dp)) }
             }
         } else {
             Column(
