@@ -79,9 +79,11 @@ class LocalPythonWebsiteTest {
         Socket("127.0.0.1", LocalStaticServer.PORT).use { socket ->
             socket.soTimeout = 25_000
             socket.getOutputStream().write(
-                "$method $path HTTP/1.1\r\n" +
-                    "Host: $hostname:${LocalStaticServer.PORT}\r\n" +
-                    "Connection: close\r\n\r\n",
+                (
+                    "$method $path HTTP/1.1\r\n" +
+                        "Host: $hostname:${LocalStaticServer.PORT}\r\n" +
+                        "Connection: close\r\n\r\n"
+                ).toByteArray(Charsets.UTF_8),
             )
             socket.getOutputStream().flush()
             socket.getInputStream().readBytes().toString(Charsets.UTF_8)
